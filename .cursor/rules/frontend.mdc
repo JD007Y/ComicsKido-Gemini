@@ -1,0 +1,13 @@
+---
+description: React/UI conventions for ComicsKido frontend
+globs: src/**/*.{ts,tsx}
+alwaysApply: false
+---
+
+# Frontend conventions
+
+- Types: `src/types.ts`. Models: `src/config/models.ts`. API client: `src/services/gemini.ts`.
+- Persistence: IndexedDB via `src/lib/db.ts` for the library; draft in `comicskido_last_story`.
+- When adding UI copy, update all languages in `src/translations.ts` (EN, HE, FR, ES, DE). Hebrew needs RTL-safe layout.
+- Keep engine selection visible; generation failures should show the error and allow retry.
+- Prefer extracting focused components/hooks over growing `App.tsx` further when touching new UI.

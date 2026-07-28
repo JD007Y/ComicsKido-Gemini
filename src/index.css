@@ -1,0 +1,85 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700;900&family=Bangers&family=Outfit:wght@400;700;900&family=Rubik:wght@400;500;700;900&family=Heebo:wght@400;500;700;900&family=Varela+Round&family=Secular+One&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Outfit", "Rubik", "Heebo", "Varela Round", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Bangers", "Secular One", system-ui, sans-serif;
+  --color-accent: var(--accent, #FF6321);
+  --shadow-accent: 4px 4px 0px 0px var(--accent, #FF6321);
+  --shadow-accent-lg: 8px 8px 0px 0px var(--accent, #FF6321);
+  --shadow-accent-xl: 12px 12px 0px 0px var(--accent, #FF6321);
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+@media print {
+  @page {
+    margin: 1cm;
+  }
+  
+  body {
+    background: white !important;
+    color: black !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .print-only {
+    display: block !important;
+  }
+
+  /* Force background colors and colors to print */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+}
+
+.print-only {
+  display: none;
+}
+
+@keyframes rainbow {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+.animate-rainbow {
+  background: linear-gradient(
+    45deg, 
+    #ff0000, #ff7300, #fffb00, #48ff00, #00ffd5, #002bff, #7a00ff, #ff00c8, #ff0000
+  );
+  background-size: 400% 400%;
+  animation: rainbow 10s ease infinite;
+}
+
+.rainbow-text {
+  background: linear-gradient(
+    45deg, 
+    #ff0000, #ff7300, #fffb00, #48ff00, #00ffd5, #002bff, #7a00ff, #ff00c8, #ff0000
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  background-size: 400% 400%;
+  animation: rainbow 10s ease infinite;
+}
+
+@keyframes stripes {
+  0% { background-position: 0 0; }
+  100% { background-position: 48px 0; }
+}
+
+.animate-stripes {
+  animation: stripes 1.4s linear infinite;
+}
+

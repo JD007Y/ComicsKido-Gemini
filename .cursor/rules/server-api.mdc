@@ -1,0 +1,14 @@
+---
+description: Server/API conventions for ComicsKido Express BFF
+globs: server.ts
+alwaysApply: false
+---
+
+# Server conventions
+
+- Return JSON errors only (no raw HTML 500 pages).
+- Honor `imageEngine` / model fields from the client; do not switch engines silently.
+- Log the exact model/engine used on success and failure.
+- Prefer clear quota/rate-limit messages for the client retry UX.
+- Keep child-safety and likeness instructions in portrait/panel prompts.
+- Do not add real API keys to responses or logs.

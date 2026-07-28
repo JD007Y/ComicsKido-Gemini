@@ -1,0 +1,6 @@
+{
+  "name": "Comicskido",
+  "description": "AI-powered personalized comic book platform for children. Transform stories into large-card comics featuring your child as the hero.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

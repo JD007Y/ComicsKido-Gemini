@@ -1,0 +1,14 @@
+---
+description: ComicsKido core product and image-engine policy (always on)
+alwaysApply: true
+---
+
+# ComicsKido core rules
+
+- Product: kids/parents AI comic studio — `landing → story → casting → layout → generating → reader`.
+- AI calls go through Express `/api/*` in `server.ts`. Keys stay server-side only.
+- **No silent Pollinations fallbacks** when Gemini/HF fail. Return a clear error.
+- **Pollinations only** if the user explicitly selected that engine.
+- **No Unsplash/SVG/stock placeholders** as substitutes for failed generations.
+- Do not start items in `ticket.md` unless assigned.
+- Follow `AGENTS.md` and `RULES.md`. Repo: https://github.com/JD007Y/ComicsKido-AIStudio
