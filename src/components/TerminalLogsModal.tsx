@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { logger, LogEntry } from '../services/logger';
+import { logger, LogEntry, sortLogsNewestFirst } from '../services/logger';
 import { Terminal, X, Trash2, Copy, AlertCircle, CheckCircle2, Info, HelpCircle, Search, RefreshCw, Layers, ExternalLink, Cpu, BookOpen, Image as ImageIcon, Sparkles, RotateCcw } from 'lucide-react';
 import { 
   StoryEngine, GeminiStorySubModel, HfStorySubModel,
@@ -11,7 +11,8 @@ import {
   getActiveGeminiSubModel, setActiveGeminiSubModel,
   getActiveHfSubModel, setActiveHfSubModel,
   getActivePollinationsSubModel, setActivePollinationsSubModel,
-  getAutoFallbackEnabled, setAutoFallbackEnabled
+  getAutoFallbackEnabled, setAutoFallbackEnabled,
+  subscribeEngineSettings
 } from '../services/gemini';
 import { FLiteTextureModelCard } from './FLiteTextureModelCard';
 
@@ -83,6 +84,20 @@ export const TerminalLogsModal: React.FC<TerminalLogsModalProps> = ({
     setAutoFallbackEnabled(enabled);
   };
 
+  // Sync engine buttons with the main app toolbar (and WinAdmin popout)
+  useEffect(() => {
+    return subscribeEngineSettings((settings) => {
+      setStoryEngineState(settings.storyEngine);
+      setGeminiStorySubModelState(settings.geminiStorySubModel);
+      setHfStorySubModelState(settings.hfStorySubModel);
+      setImageEngineState(settings.imageEngine);
+      setGeminiSubModelState(settings.geminiSubModel);
+      setHfSubModelState(settings.hfSubModel);
+      setPollinationsSubModelState(settings.pollinationsSubModel);
+      setAutoFallbackState(settings.autoFallback);
+    });
+  }, []);
+
   useEffect(() => {
     setLogs(logger.getLogs());
     const unsubscribe = logger.subscribe(() => {
@@ -116,10 +131,21 @@ export const TerminalLogsModal: React.FC<TerminalLogsModalProps> = ({
   const combinedLogs: LogEntry[] = React.useMemo(() => {
     const map = new Map<string, LogEntry>();
     [...logs, ...serverLogs].forEach(l => {
-      map.set(l.id, l);
+      map.set(l.id, {
+        ...l,
+        createdAt: (l as LogEntry).createdAt || 0,
+      });
     });
-    return Array.from(map.values()).sort((a, b) => b.id.localeCompare(a.id));
+    return sortLogsNewestFirst(Array.from(map.values()));
   }, [logs, serverLogs]);
+
+  // Keep newest entries visible at the top
+  useEffect(() => {
+    if (!isOpen) return;
+    // Scroll the log stream container to top when new logs arrive
+    const stream = document.querySelector('[data-log-stream="true"]');
+    if (stream) stream.scrollTop = 0;
+  }, [combinedLogs.length, isOpen]);
 
   const errorLogs = React.useMemo(() => {
     return combinedLogs.filter(l => l.level === 'error' || l.title.toLowerCase().includes('failed') || l.title.toLowerCase().includes('error'));
@@ -425,6 +451,7 @@ export const TerminalLogsModal: React.FC<TerminalLogsModalProps> = ({
                     className="bg-black/50 border border-gray-700 rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:border-accent"
                   >
                     <option value="ALL">All Categories</option>
+                    <option value="UI">UI / Clicks & Flow</option>
                     <option value="STORY">Story Decompose</option>
                     <option value="PANEL_GEN">Panel Image Gen</option>
                     <option value="AVATAR_GEN">Avatar Portrait Gen</option>
@@ -472,7 +499,7 @@ export const TerminalLogsModal: React.FC<TerminalLogsModalProps> = ({
             </div>
 
             {/* Log Output Body */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-2 bg-[#0b0f19] selection:bg-accent selection:text-black text-xs font-mono text-left" dir="ltr">
+            <div data-log-stream="true" className="flex-1 overflow-y-auto p-4 space-y-2 bg-[#0b0f19] selection:bg-accent selection:text-black text-xs font-mono text-left" dir="ltr">
               {filteredLogs.length === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center text-gray-500 py-12 text-left" dir="ltr">
                   <Terminal size={36} className="mb-2 opacity-30" />
@@ -482,7 +509,9 @@ export const TerminalLogsModal: React.FC<TerminalLogsModalProps> = ({
                 filteredLogs.map(log => {
                   let badgeBg = 'bg-blue-500/20 text-blue-400 border-blue-500/30';
                   let Icon = Info;
-                  if (log.level === 'success') {
+                  if (log.category === 'UI') {
+                    badgeBg = 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30';
+                  } else if (log.level === 'success') {
                     badgeBg = 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30';
                     Icon = CheckCircle2;
                   } else if (log.level === 'warn') {

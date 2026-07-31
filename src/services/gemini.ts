@@ -1,27 +1,6 @@
 import { Language, PanelLayout, Panel, TokenUsage } from "../types";
 import { logger } from "./logger";
 
-export function getStaticLikenessOfUrl(photoUrl: string): string | null {
-  if (!photoUrl) return null;
-  const url = photoUrl.toLowerCase();
-  if (url.includes('photo-1544005313-94ddf0286df2')) {
-    return "An 8-year-old girl with long vibrant red-orange hair, fair skin with cute freckles on her nose, large round black-rimmed glasses, and an amber-yellow knitted sweater.";
-  }
-  if (url.includes('photo-1506794778202-cad84cf45f1d')) {
-    return "A 9-year-old active adventurous boy with short messy brown hair, friendly freckles, and a sporty blue hoodie.";
-  }
-  if (url.includes('photo-1517841905240-472988babdf9')) {
-    return "A 7-year-old happy girl with curly dark hair tied in cute double space buns, sparkling dark brown eyes, a wide bright toothy smile, and a pink t-shirt.";
-  }
-  if (url.includes('photo-1507003211169-0a1dd7228f2d')) {
-    return "A 5-year-old toddler boy with short neat blonde hair, highly expressive blue laughing eyes, a joyful giggling expression, and a bright green t-shirt.";
-  }
-  if (url.includes('photo-1543466835-00a7907e9de1')) {
-    return "A fluffy golden-yellow retriever dog with happy floppy ears, a black wet snout, friendly eyes, wearing a neat red neck collar.";
-  }
-  return null;
-}
-
 export function isCharacterChild(description: string, name: string): boolean {
   const descLower = description.toLowerCase();
   const nameLower = name.toLowerCase();
@@ -138,24 +117,15 @@ export async function translateToEnglishIfNeeded(text: string): Promise<string> 
 }
 
 export async function describePhotoLikeness(photoUrl: string, name: string): Promise<string> {
-  const staticLikeness = getStaticLikenessOfUrl(photoUrl);
-  if (staticLikeness) {
-    logger.addLog({
-      category: 'PHOTO_LIKENESS',
-      level: 'info',
-      title: `Static photo likeness matched for ${name}`,
-      details: staticLikeness,
-    });
-    return staticLikeness;
-  }
-
+  // Always analyze the real photo — never use hardcoded demo "static likeness"
+  // (those fake strings caused brown-haired adults to become "blonde toddlers").
   const startTime = Date.now();
   logger.addLog({
     category: 'PHOTO_LIKENESS',
     level: 'info',
     title: `Analyzing uploaded photo likeness for ${name}`,
-    details: 'Sending photo payload to server vision model',
-    model: 'gemini-2.5-flash',
+    details: `Sending photo to vision model\nSource: ${photoUrl.startsWith('data:') ? `data-uri (${Math.round(photoUrl.length / 1024)} KB)` : photoUrl.substring(0, 120)}`,
+    model: 'gemini-vision',
   });
 
   try {
@@ -171,9 +141,9 @@ export async function describePhotoLikeness(photoUrl: string, name: string): Pro
       title: `Photo likeness generated for ${name}`,
       details: data.text,
       durationMs: duration,
-      model: 'gemini-2.5-flash',
+      model: data.modelUsed || 'gemini-vision',
     });
-    return data.text || "A pleasant face with expressive features.";
+    return data.text || "";
   } catch (err: any) {
     logger.addLog({
       category: 'PHOTO_LIKENESS',
@@ -183,7 +153,7 @@ export async function describePhotoLikeness(photoUrl: string, name: string): Pro
       durationMs: Date.now() - startTime,
     });
     console.error("Client photo likeness proxy failed:", err);
-    return "A pleasant face with expressive features.";
+    return "";
   }
 }
 
@@ -251,6 +221,76 @@ let activeStoryEngine: StoryEngine = (typeof localStorage !== 'undefined' && (lo
 let activeGeminiStorySubModel: GeminiStorySubModel = (typeof localStorage !== 'undefined' && (localStorage.getItem('comicskido_gemini_story_sub_model') as GeminiStorySubModel)) || 'gemini-3.6-flash';
 let activeHfStorySubModel: HfStorySubModel = (typeof localStorage !== 'undefined' && (localStorage.getItem('comicskido_hf_story_sub_model') as HfStorySubModel)) || 'google/gemma-3-4b-it';
 
+export type EngineSettingsSnapshot = {
+  imageEngine: ImageEngine;
+  hfSubModel: HuggingFaceSubModel;
+  geminiSubModel: GeminiImageSubModel;
+  pollinationsSubModel: PollinationsSubModel;
+  autoFallback: boolean;
+  storyEngine: StoryEngine;
+  geminiStorySubModel: GeminiStorySubModel;
+  hfStorySubModel: HfStorySubModel;
+};
+
+type EngineSettingsListener = (settings: EngineSettingsSnapshot) => void;
+
+const engineSettingsListeners = new Set<EngineSettingsListener>();
+let engineSettingsChannel: BroadcastChannel | null = null;
+
+try {
+  if (typeof BroadcastChannel !== 'undefined') {
+    engineSettingsChannel = new BroadcastChannel('comicskido_engine_settings');
+    engineSettingsChannel.onmessage = (event) => {
+      if (!event.data || event.data.type !== 'ENGINE_SETTINGS') return;
+      applyEngineSettingsSnapshot(event.data.settings as EngineSettingsSnapshot, false);
+    };
+  }
+} catch (_) {}
+
+export function getEngineSettingsSnapshot(): EngineSettingsSnapshot {
+  return {
+    imageEngine: activeImageEngine,
+    hfSubModel: activeHfSubModel,
+    geminiSubModel: activeGeminiSubModel,
+    pollinationsSubModel: activePollinationsSubModel,
+    autoFallback: autoFallbackEnabled,
+    storyEngine: activeStoryEngine,
+    geminiStorySubModel: activeGeminiStorySubModel,
+    hfStorySubModel: activeHfStorySubModel,
+  };
+}
+
+function applyEngineSettingsSnapshot(settings: EngineSettingsSnapshot, broadcast: boolean) {
+  activeImageEngine = settings.imageEngine;
+  activeHfSubModel = settings.hfSubModel;
+  activeGeminiSubModel = settings.geminiSubModel;
+  activePollinationsSubModel = settings.pollinationsSubModel;
+  autoFallbackEnabled = settings.autoFallback;
+  activeStoryEngine = settings.storyEngine;
+  activeGeminiStorySubModel = settings.geminiStorySubModel;
+  activeHfStorySubModel = settings.hfStorySubModel;
+
+  engineSettingsListeners.forEach((listener) => listener(settings));
+
+  if (broadcast) {
+    try {
+      engineSettingsChannel?.postMessage({ type: 'ENGINE_SETTINGS', settings });
+    } catch (_) {}
+  }
+}
+
+function publishEngineSettings() {
+  applyEngineSettingsSnapshot(getEngineSettingsSnapshot(), true);
+}
+
+/** Keep main app + WinAdmin console engine buttons in sync (same tab + popout). */
+export function subscribeEngineSettings(listener: EngineSettingsListener): () => void {
+  engineSettingsListeners.add(listener);
+  return () => {
+    engineSettingsListeners.delete(listener);
+  };
+}
+
 export function getAutoFallbackEnabled(): boolean {
   return autoFallbackEnabled;
 }
@@ -260,6 +300,7 @@ export function setAutoFallbackEnabled(enabled: boolean): void {
   if (typeof localStorage !== 'undefined') {
     localStorage.setItem('comicskido_auto_fallback', enabled ? 'true' : 'false');
   }
+  publishEngineSettings();
 }
 
 export function getActiveImageEngine(): ImageEngine {
@@ -271,6 +312,7 @@ export function setActiveImageEngine(engine: ImageEngine): void {
   if (typeof localStorage !== 'undefined') {
     localStorage.setItem('comicskido_image_engine', engine);
   }
+  publishEngineSettings();
 }
 
 export function getActiveHfSubModel(): HuggingFaceSubModel {
@@ -282,6 +324,7 @@ export function setActiveHfSubModel(model: HuggingFaceSubModel): void {
   if (typeof localStorage !== 'undefined') {
     localStorage.setItem('comicskido_hf_sub_model', model);
   }
+  publishEngineSettings();
 }
 
 export function getActiveGeminiSubModel(): GeminiImageSubModel {
@@ -293,6 +336,7 @@ export function setActiveGeminiSubModel(model: GeminiImageSubModel): void {
   if (typeof localStorage !== 'undefined') {
     localStorage.setItem('comicskido_gemini_sub_model', model);
   }
+  publishEngineSettings();
 }
 
 export function getActivePollinationsSubModel(): PollinationsSubModel {
@@ -304,6 +348,7 @@ export function setActivePollinationsSubModel(model: PollinationsSubModel): void
   if (typeof localStorage !== 'undefined') {
     localStorage.setItem('comicskido_pollinations_sub_model', model);
   }
+  publishEngineSettings();
 }
 
 export function getActiveStoryEngine(): StoryEngine {
@@ -315,6 +360,7 @@ export function setActiveStoryEngine(engine: StoryEngine): void {
   if (typeof localStorage !== 'undefined') {
     localStorage.setItem('comicskido_story_engine', engine);
   }
+  publishEngineSettings();
 }
 
 export function getActiveGeminiStorySubModel(): GeminiStorySubModel {
@@ -326,6 +372,7 @@ export function setActiveGeminiStorySubModel(model: GeminiStorySubModel): void {
   if (typeof localStorage !== 'undefined') {
     localStorage.setItem('comicskido_gemini_story_sub_model', model);
   }
+  publishEngineSettings();
 }
 
 export function getActiveHfStorySubModel(): HfStorySubModel {
@@ -337,6 +384,7 @@ export function setActiveHfStorySubModel(model: HfStorySubModel): void {
   if (typeof localStorage !== 'undefined') {
     localStorage.setItem('comicskido_hf_story_sub_model', model);
   }
+  publishEngineSettings();
 }
 
 export async function generatePanelImage(
@@ -427,24 +475,42 @@ export async function generateCharacterImage(
     category: 'AVATAR_GEN',
     level: 'info',
     title: `Generating Character Avatar Portrait for '${name}'`,
-    details: `Description: "${description.substring(0, 80)}..." [Engine: ${selectedEngine}, Model: ${targetModelName}, AutoFallback: ${fallbackFlag ? 'ON' : 'OFF'}]`,
+    details: [
+      `Engine: ${selectedEngine}`,
+      `Model: ${targetModelName}`,
+      `Art style: ${artStyle}`,
+      `AutoFallback: ${fallbackFlag ? 'ON' : 'OFF'}`,
+      ``,
+      `--- CLIENT DESCRIPTION SENT (${description.length} chars) ---`,
+      description,
+    ].join('\n'),
     model: targetModelName,
   });
 
   try {
+    const requestBody = { 
+      name, 
+      description, 
+      artStyle, 
+      imageEngine: selectedEngine, 
+      hfModel: selectedHfModel,
+      geminiModel: selectedGeminiModel,
+      pollinationsModel: selectedPollinationsModel,
+      allowAutoFallback: fallbackFlag
+    };
+
+    logger.addLog({
+      category: 'AVATAR_GEN',
+      level: 'info',
+      title: `Avatar HTTP request body for '${name}'`,
+      details: JSON.stringify(requestBody, null, 2),
+      model: targetModelName,
+    });
+
     const data = await safeJsonFetch("/api/gemini/generate-character-image", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ 
-        name, 
-        description, 
-        artStyle, 
-        imageEngine: selectedEngine, 
-        hfModel: selectedHfModel,
-        geminiModel: selectedGeminiModel,
-        pollinationsModel: selectedPollinationsModel,
-        allowAutoFallback: fallbackFlag
-      }),
+      body: JSON.stringify(requestBody),
     });
     const duration = Date.now() - startTime;
     const actualModel = data.modelUsed || targetModelName;
@@ -453,7 +519,15 @@ export async function generateCharacterImage(
       category: 'AVATAR_GEN',
       level: 'success',
       title: `Avatar Portrait Rendered for '${name}'`,
-      details: formatImagePayloadDetails(data.imageUrl),
+      details: [
+        formatImagePayloadDetails(data.imageUrl),
+        data.promptUsed
+          ? `\n--- FINAL PROMPT USED BY MODEL (${data.promptUsed.length} chars) ---\n${data.promptUsed}`
+          : '',
+        data.request
+          ? `\n--- SERVER REQUEST META ---\n${JSON.stringify(data.request, null, 2)}`
+          : '',
+      ].filter(Boolean).join('\n'),
       durationMs: duration,
       model: actualModel,
     });

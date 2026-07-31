@@ -6,3 +6,5 @@ coverage/
 *.log
 .env*
 !.env.example
+model_usage_history.json
+.data/

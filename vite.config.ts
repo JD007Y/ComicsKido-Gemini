@@ -16,11 +16,26 @@ export default defineConfig(({mode}) => {
       },
     },
     server: {
-      // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
-      hmr: process.env.DISABLE_HMR !== 'true',
-      // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
-      watch: process.env.DISABLE_HMR === 'true' ? null : {},
+      // HMR remounts App.tsx and dumps users mid-generation back to story/layout.
+      // Opt in only with ENABLE_HMR=true. AI Studio sets DISABLE_HMR=true as well.
+      hmr:
+        process.env.DISABLE_HMR === 'true' || process.env.ENABLE_HMR !== 'true'
+          ? false
+          : true,
+      watch:
+        process.env.DISABLE_HMR === 'true' || process.env.ENABLE_HMR !== 'true'
+          ? null
+          : {
+              ignored: [
+                '**/model_usage_history.json',
+                '**/.data/**',
+                '**/server.ts',
+                '**/.env',
+                '**/.env.*',
+                '**/node_modules/**',
+                '**/.git/**',
+              ],
+            },
     },
   };
 });

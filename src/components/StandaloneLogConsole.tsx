@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { logger, LogEntry } from '../services/logger';
+import { logger, LogEntry, sortLogsNewestFirst } from '../services/logger';
 import { 
   Terminal, X, Trash2, Copy, AlertCircle, CheckCircle2, Info, 
   HelpCircle, Search, RefreshCw, Layers, ExternalLink, Download, 
@@ -15,7 +15,8 @@ import {
   getActiveGeminiSubModel, setActiveGeminiSubModel,
   getActiveHfSubModel, setActiveHfSubModel,
   getActivePollinationsSubModel, setActivePollinationsSubModel,
-  getAutoFallbackEnabled, setAutoFallbackEnabled
+  getAutoFallbackEnabled, setAutoFallbackEnabled,
+  subscribeEngineSettings
 } from '../services/gemini';
 import { FLiteTextureModelCard } from './FLiteTextureModelCard';
 
@@ -80,6 +81,20 @@ export const StandaloneLogConsole: React.FC = () => {
     setAutoFallbackEnabled(enabled);
   };
 
+  // Sync engine buttons with the main app toolbar (and other WinAdmin windows)
+  useEffect(() => {
+    return subscribeEngineSettings((settings) => {
+      setStoryEngineState(settings.storyEngine);
+      setGeminiStorySubModelState(settings.geminiStorySubModel);
+      setHfStorySubModelState(settings.hfStorySubModel);
+      setImageEngineState(settings.imageEngine);
+      setGeminiSubModelState(settings.geminiSubModel);
+      setHfSubModelState(settings.hfSubModel);
+      setPollinationsSubModelState(settings.pollinationsSubModel);
+      setAutoFallbackState(settings.autoFallback);
+    });
+  }, []);
+
   const fetchServerData = async () => {
     setIsFetching(true);
     try {
@@ -122,14 +137,22 @@ export const StandaloneLogConsole: React.FC = () => {
     };
   }, [isAutoRefresh]);
 
-  // Combine and deduplicate client & server logs
+  // Combine and deduplicate client & server logs (newest first — latest on top)
   const combinedLogs: LogEntry[] = React.useMemo(() => {
     const map = new Map<string, LogEntry>();
     [...clientLogs, ...serverLogs].forEach(l => {
-      map.set(l.id, l);
+      map.set(l.id, {
+        ...l,
+        createdAt: (l as LogEntry).createdAt || 0,
+      });
     });
-    return Array.from(map.values()).sort((a, b) => b.id.localeCompare(a.id));
+    return sortLogsNewestFirst(Array.from(map.values()));
   }, [clientLogs, serverLogs]);
+
+  useEffect(() => {
+    const stream = document.querySelector('[data-log-stream="true"]');
+    if (stream) stream.scrollTop = 0;
+  }, [combinedLogs.length]);
 
   const filteredLogs = combinedLogs.filter(log => {
     if (filterCategory !== 'ALL' && log.category !== filterCategory) return false;
@@ -540,6 +563,7 @@ export const StandaloneLogConsole: React.FC = () => {
                     className="bg-black/60 border border-zinc-700 rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:border-accent"
                   >
                     <option value="ALL">All Categories</option>
+                    <option value="UI">UI (Clicks & Flow)</option>
                     <option value="STORY">STORY (Decomposition)</option>
                     <option value="PANEL_GEN">PANEL_GEN (Comic Art)</option>
                     <option value="AVATAR_GEN">AVATAR_GEN (Portraits)</option>
@@ -573,7 +597,7 @@ export const StandaloneLogConsole: React.FC = () => {
             </div>
 
             {/* Log Stream Container */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-2 font-mono text-xs select-text">
+            <div data-log-stream="true" className="flex-1 overflow-y-auto p-4 space-y-2 font-mono text-xs select-text">
               {filteredLogs.length === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center text-zinc-500 font-sans space-y-2 py-12">
                   <Info size={32} className="opacity-40" />
@@ -584,6 +608,7 @@ export const StandaloneLogConsole: React.FC = () => {
                   const isError = log.level === 'error' || log.title.toLowerCase().includes('failed');
                   const isSuccess = log.level === 'success' || log.title.toLowerCase().includes('rendered') || log.title.toLowerCase().includes('succeeded');
                   const isWarn = log.level === 'warn';
+                  const isUi = log.category === 'UI';
 
                   return (
                     <div
@@ -595,6 +620,8 @@ export const StandaloneLogConsole: React.FC = () => {
                           ? 'bg-emerald-950/20 border-emerald-800/60 text-emerald-200'
                           : isWarn
                           ? 'bg-amber-950/20 border-amber-800/60 text-amber-200'
+                          : isUi
+                          ? 'bg-cyan-950/20 border-cyan-800/50 text-cyan-100'
                           : 'bg-black/40 border-zinc-800/80 text-zinc-200'
                       }`}
                     >
@@ -605,7 +632,9 @@ export const StandaloneLogConsole: React.FC = () => {
                           </span>
                           <span
                             className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase font-sans border ${
-                              log.category === 'STORY'
+                              log.category === 'UI'
+                                ? 'bg-cyan-900/60 text-cyan-300 border-cyan-700/60'
+                                : log.category === 'STORY'
                                 ? 'bg-purple-900/60 text-purple-300 border-purple-700/60'
                                 : log.category === 'PANEL_GEN'
                                 ? 'bg-blue-900/60 text-blue-300 border-blue-700/60'

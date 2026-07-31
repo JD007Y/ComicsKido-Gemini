@@ -49,9 +49,101 @@ function buildPollinationsUrl(prompt: string, aspectRatio: "1:1" | "16:9" = "1:1
   const seed = Math.floor(Math.random() * 899999) + 100000;
   const width = aspectRatio === "16:9" ? 1024 : 800;
   const height = aspectRatio === "16:9" ? 576 : 800;
+
+  // Normalize UI model ids to Pollinations API ids
+  const modelMap: Record<string, string> = {
+    'z-image': 'zimage',
+    'gpt-image': 'gptimage',
+  };
+  const apiModel = modelMap[subModel] || subModel;
   
   const enhancedPrompt = `${cleanPrompt}, vibrant graphic novel illustration, masterwork comic art, crisp inked lineart, highly detailed 8k art`;
-  return `https://image.pollinations.ai/prompt/${encodeURIComponent(enhancedPrompt)}?width=${width}&height=${height}&nologo=true&seed=${seed}&model=${encodeURIComponent(subModel)}&enhance=true`;
+  return `https://image.pollinations.ai/prompt/${encodeURIComponent(enhancedPrompt)}?width=${width}&height=${height}&nologo=true&seed=${seed}&model=${encodeURIComponent(apiModel)}&enhance=true`;
+}
+
+async function generateWithPollinations(
+  prompt: string,
+  aspectRatio: "1:1" | "16:9" = "1:1",
+  subModel: string = "flux",
+  logCategory: 'AVATAR_GEN' | 'PANEL_GEN' = 'AVATAR_GEN'
+): Promise<ImageGenResult> {
+  const selectedModel = subModel || "flux";
+  const url = buildPollinationsUrl(prompt, aspectRatio, selectedModel);
+  console.log(`[Pollinations] Fetching rendered image (model=${selectedModel})...`);
+  pushServerLog({
+    category: logCategory,
+    level: 'info',
+    title: `Pollinations image HTTP request (${selectedModel})`,
+    details: [
+      `Method: GET`,
+      `Model: ${selectedModel}`,
+      `Aspect: ${aspectRatio}`,
+      `Prompt (${prompt.length} chars):`,
+      prompt.length > 1200 ? prompt.slice(0, 1200) + '…' : prompt,
+      ``,
+      `Request URL:`,
+      url.length > 500 ? url.slice(0, 500) + '…' : url,
+    ].join('\n'),
+    model: `pollinations-${selectedModel}`,
+  });
+
+  let lastErr = "Unknown Pollinations error";
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 90000);
+      const response = await fetch(url, {
+        method: "GET",
+        signal: controller.signal,
+        headers: {
+          Accept: "image/*,*/*",
+          "User-Agent": "ComicsKido-AIStudio/1.0",
+        },
+      });
+      clearTimeout(timeout);
+
+      if (!response.ok) {
+        lastErr = `HTTP ${response.status} ${response.statusText}`;
+        console.warn(`[Pollinations] Attempt ${attempt}/3 failed: ${lastErr}`);
+        // Rate limits need a longer cool-down
+        await sleep(response.status === 429 ? 4000 * attempt : 1000 * attempt);
+        continue;
+      }
+
+      const contentType = response.headers.get("content-type") || "";
+      const buffer = Buffer.from(await response.arrayBuffer());
+      if (!buffer.length) {
+        lastErr = "Empty image payload from Pollinations";
+        console.warn(`[Pollinations] Attempt ${attempt}/3 failed: ${lastErr}`);
+        await sleep(1000 * attempt);
+        continue;
+      }
+
+      // Reject HTML error pages masquerading as success
+      if (contentType.includes("text/html") || buffer.slice(0, 15).toString("utf8").includes("<!DOCTYPE")) {
+        lastErr = "Pollinations returned HTML instead of an image";
+        console.warn(`[Pollinations] Attempt ${attempt}/3 failed: ${lastErr}`);
+        await sleep(1500 * attempt);
+        continue;
+      }
+
+      const mime = contentType.startsWith("image/")
+        ? contentType.split(";")[0].trim()
+        : "image/jpeg";
+      const base64 = buffer.toString("base64");
+      console.log(`[Pollinations] SUCCESS model=${selectedModel} bytes=${buffer.length} mime=${mime}`);
+      return {
+        imageUrl: `data:${mime};base64,${base64}`,
+        modelUsed: `pollinations-${selectedModel}`,
+      };
+    } catch (e: any) {
+      lastErr = e?.name === "AbortError" ? "Timed out waiting for Pollinations image" : (e?.message || String(e));
+      console.warn(`[Pollinations] Attempt ${attempt}/3 failed: ${lastErr}`);
+      await sleep(1000 * attempt);
+    }
+  }
+
+  throw new Error(`Pollinations image generation failed: ${lastErr}`);
 }
 
 function getLatestHfToken(): string {
@@ -313,9 +405,28 @@ interface ModelUsageRecord {
   status: 'success' | 'fallback' | 'failed';
 }
 
-const MODEL_USAGE_FILE = path.join(process.cwd(), 'model_usage_history.json');
+const MODEL_USAGE_DIR = path.join(process.cwd(), '.data');
+const MODEL_USAGE_FILE = path.join(MODEL_USAGE_DIR, 'model_usage_history.json');
+const LEGACY_MODEL_USAGE_FILE = path.join(process.cwd(), 'model_usage_history.json');
+
+function ensureModelUsageDir() {
+  try {
+    if (!fs.existsSync(MODEL_USAGE_DIR)) {
+      fs.mkdirSync(MODEL_USAGE_DIR, { recursive: true });
+    }
+    // One-time migrate old root-level file into .data (out of Vite's reload path)
+    if (fs.existsSync(LEGACY_MODEL_USAGE_FILE) && !fs.existsSync(MODEL_USAGE_FILE)) {
+      fs.renameSync(LEGACY_MODEL_USAGE_FILE, MODEL_USAGE_FILE);
+    } else if (fs.existsSync(LEGACY_MODEL_USAGE_FILE) && fs.existsSync(MODEL_USAGE_FILE)) {
+      try { fs.unlinkSync(LEGACY_MODEL_USAGE_FILE); } catch (_) {}
+    }
+  } catch (e) {
+    console.warn("[Server] Failed to prepare .data directory:", e);
+  }
+}
 
 function loadModelUsageHistory(): ModelUsageRecord[] {
+  ensureModelUsageDir();
   try {
     if (fs.existsSync(MODEL_USAGE_FILE)) {
       const content = fs.readFileSync(MODEL_USAGE_FILE, 'utf-8');
@@ -361,6 +472,7 @@ function loadModelUsageHistory(): ModelUsageRecord[] {
 interface ServerLogEntry {
   id: string;
   timestamp: string;
+  createdAt: number;
   category: 'STORY' | 'PANEL_GEN' | 'AVATAR_GEN' | 'PHOTO_LIKENESS' | 'TRANSLATION' | 'SYSTEM' | 'SERVER';
   level: 'info' | 'warn' | 'error' | 'success';
   title: string;
@@ -373,6 +485,7 @@ const serverLogsBuffer: ServerLogEntry[] = [
   {
     id: 'init_sys',
     timestamp: new Date().toLocaleTimeString(),
+    createdAt: Date.now(),
     category: 'SERVER',
     level: 'info',
     title: 'Server Engine & Live Monitor Ready',
@@ -380,13 +493,14 @@ const serverLogsBuffer: ServerLogEntry[] = [
   }
 ];
 
-function pushServerLog(entry: Omit<ServerLogEntry, 'id' | 'timestamp'>) {
+function pushServerLog(entry: Omit<ServerLogEntry, 'id' | 'timestamp' | 'createdAt'>) {
   const full: ServerLogEntry = {
     ...entry,
     id: `srv_${Date.now()}_${Math.floor(Math.random() * 10000)}`,
     timestamp: new Date().toLocaleTimeString(),
+    createdAt: Date.now(),
   };
-  serverLogsBuffer.unshift(full);
+  serverLogsBuffer.unshift(full); // newest first — latest log on top
   if (serverLogsBuffer.length > 300) {
     serverLogsBuffer.pop();
   }
@@ -394,6 +508,7 @@ function pushServerLog(entry: Omit<ServerLogEntry, 'id' | 'timestamp'>) {
 
 function saveModelUsageHistory() {
   try {
+    ensureModelUsageDir();
     fs.writeFileSync(MODEL_USAGE_FILE, JSON.stringify(modelUsageHistory, null, 2));
   } catch (e) {
     console.warn("[Server] Failed to write model_usage_history.json:", e);
@@ -584,7 +699,8 @@ async function generateImageWithFallback(
   hfSubModel?: string,
   geminiSubModel?: string,
   pollinationsSubModel?: string,
-  allowAutoFallback: boolean = false
+  allowAutoFallback: boolean = false,
+  pollinationsLogCategory: 'AVATAR_GEN' | 'PANEL_GEN' = 'PANEL_GEN'
 ): Promise<ImageGenResult> {
   if (imageEngine === "huggingface") {
     console.log(`[Server Image Gen] Using Hugging Face Inference API engine (Model: ${hfSubModel || 'FLUX.1-schnell'}, AutoFallback: ${allowAutoFallback})...`);
@@ -594,10 +710,7 @@ async function generateImageWithFallback(
   if (imageEngine === "pollinations") {
     const selectedModel = pollinationsSubModel || "flux";
     console.log(`[Server Image Gen] Using Pollinations AI engine (Model: ${selectedModel})...`);
-    return {
-      imageUrl: buildPollinationsUrl(prompt, aspectRatio, selectedModel),
-      modelUsed: `pollinations-${selectedModel}`
-    };
+    return await generateWithPollinations(prompt, aspectRatio, selectedModel, pollinationsLogCategory);
   }
 
   // Google Gemini Image Generation Models
@@ -770,32 +883,6 @@ async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
   throw lastError;
 }
 
-// Static likeness lookup for pre-populated demo photos to save API and avoid redundancy
-function getStaticLikenessOfUrl(photoUrl: string): string | null {
-  if (!photoUrl) return null;
-  // NEVER return static likeness for generated data URIs, Pollinations, or SVGs!
-  if (photoUrl.startsWith('data:') || photoUrl.includes('pollinations.ai') || photoUrl.includes('base64') || photoUrl.includes('svg')) {
-    return null;
-  }
-  const url = photoUrl.toLowerCase();
-  if (url.includes('photo-1544005313-94ddf0286df2')) {
-    return "An 8-year-old girl with long vibrant red-orange hair, fair skin with cute freckles on her nose, large round black-rimmed glasses, and an amber-yellow knitted sweater.";
-  }
-  if (url.includes('photo-1506794778202-cad84cf45f1d')) {
-    return "A 9-year-old active adventurous boy with short messy brown hair, friendly freckles, and a sporty blue hoodie.";
-  }
-  if (url.includes('photo-1517841905240-472988babdf9')) {
-    return "A 7-year-old happy girl with curly dark hair tied in cute double space buns, sparkling dark brown eyes, a wide bright toothy smile, and a pink t-shirt.";
-  }
-  if (url.includes('photo-1507003211169-0a1dd7228f2d')) {
-    return "A 5-year-old toddler boy with short neat blonde hair, highly expressive blue laughing eyes, a joyful giggling expression, and a bright green t-shirt.";
-  }
-  if (url.includes('photo-1543466835-00a7907e9de1')) {
-    return "A fluffy golden-yellow retriever dog with happy floppy ears, a black wet snout, friendly eyes, wearing a neat red neck collar.";
-  }
-  return null;
-}
-
 // Child classifier helper
 function isCharacterChild(description: string, name: string): boolean {
   const descLower = description.toLowerCase();
@@ -875,23 +962,40 @@ TEXT TO TRANSLATE IN ONE PARAGRAPH: "${text}"`,
   }
 });
 
-// Photo Likeness analyzer
+// Photo Likeness analyzer — always reads the real image (no hardcoded demo strings)
 app.post("/api/gemini/describe-photo-likeness", async (req, res) => {
   const { photoUrl, name } = req.body;
-  const staticLikeness = getStaticLikenessOfUrl(photoUrl);
-  if (staticLikeness) {
-    return res.json({ text: staticLikeness });
-  }
 
   try {
-    const resultText = await withRetry(async () => {
-      if (!photoUrl || !photoUrl.startsWith('data:image/')) {
-        return "A pleasant character with vibrant features.";
+    const result = await withRetry(async () => {
+      let mimeType = "";
+      let base64Data = "";
+
+      if (photoUrl && photoUrl.startsWith("data:image/")) {
+        const match = photoUrl.match(/^data:([^;]+);base64,(.+)$/);
+        if (!match) {
+          throw new Error("Invalid data-URI photo payload");
+        }
+        mimeType = match[1];
+        base64Data = match[2];
+      } else if (photoUrl && (photoUrl.startsWith("http://") || photoUrl.startsWith("https://"))) {
+        // Demo library / remote photos: download bytes so vision can actually see them
+        const imgRes = await fetch(photoUrl, {
+          headers: { Accept: "image/*", "User-Agent": "ComicsKido-AIStudio/1.0" },
+        });
+        if (!imgRes.ok) {
+          throw new Error(`Failed to download reference photo (${imgRes.status})`);
+        }
+        const contentType = imgRes.headers.get("content-type") || "image/jpeg";
+        const buffer = Buffer.from(await imgRes.arrayBuffer());
+        if (!buffer.length) {
+          throw new Error("Reference photo download was empty");
+        }
+        mimeType = contentType.startsWith("image/") ? contentType.split(";")[0].trim() : "image/jpeg";
+        base64Data = buffer.toString("base64");
+      } else {
+        throw new Error("No usable photo URL provided for likeness analysis");
       }
-      const match = photoUrl.match(/^data:([^;]+);base64,(.+)$/);
-      if (!match) return "A character with expressive eyes.";
-      const mimeType = match[1];
-      const base64Data = match[2];
 
       const models = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro"];
       let lastErr: any;
@@ -903,20 +1007,22 @@ app.post("/api/gemini/describe-photo-likeness", async (req, res) => {
               {
                 role: "user",
                 parts: [
-                  { text: `Task: Analyze the attached portrait photograph of character '${name}' in extreme detail to produce an impeccable physical description for cartoon and comic book generation.
-Your description must capture the exact visual likeness, facial structure, and unique traits of this person, so that an image generator can draw them to look EXACTLY like they do in real life.
+                  { text: `Task: Analyze the attached portrait photograph of character '${name || "Hero"}' and write an accurate physical description for comic avatar generation.
 
-1. FIRST, determine the exact age and gender classification (e.g., "A middle-aged man", "A little girl around 6 years old", "A young adult woman in her early 20s").
-   - If a child: You MUST start with "A young child (around X years old)" and describe with youth-focused features: "soft round face", "cute chubby cheeks", "large bright eyes", "small button nose". Never use adult terms like "stubble" or "sharp defined jawline".
-   - If an adult: Specify their adult structure, face outline, facial hair, and age indicators.
+CRITICAL RULES:
+- Describe ONLY what you actually see in THIS photo. Do not invent a different age, hair color, or identity.
+- If the person has brown/black/dark hair, you MUST say that exact color — never substitute blonde.
+- If they look like an adult, describe them as an adult. If a child, describe them as a child. Match apparent age from the photo.
+- Hair color, skin tone, eye color, glasses, facial hair, and clothing colors must match the photo exactly.
 
-2. SECOND, describe in precise physical detail:
-   - Hair: the exact style, parting, texture, length, cut, and full color (e.g., "short messy dark brown spikes with shaved sides", "long straight auburn hair with bangs, parted down the middle").
-   - Facial features: eye shape and color, eyebrows, nose shape, high cheekbones, chin, glasses (color and frame shape), skin tone/complexion (e.g., olive-skinned, pale/fair, dark-skinned), freckles, wrinkles, or clear skin.
-   - Expressions & Lips: style of smile (e.g., wide toothy grin, warm closed-lip smile, confident chuckle).
-   - Clothing: exact style, sleeves, collar, and colors of the top garment they are wearing.
+Structure (one paragraph, English only, under 80 words):
+1) Age presentation + gender (e.g. "A young adult man in his 20s", "A girl around 7 years old")
+2) Hair: length, style, exact color
+3) Face: eyes, skin tone, notable features
+4) Expression
+5) Clothing colors/style visible in the photo
 
-Write a single, highly descriptive physical blueprint paragraph in English. Output ONLY the pure physical description text. Do not write any preambles, notes, or introductions. Keep it under 75 words.` },
+Output ONLY the description paragraph. No preamble.` },
                   {
                     inlineData: {
                       mimeType,
@@ -927,10 +1033,20 @@ Write a single, highly descriptive physical blueprint paragraph in English. Outp
               }
             ],
             config: {
-              temperature: 0.2,
+              temperature: 0.1,
             }
           });
-          return response.text?.trim() || "A beautiful face with expressive eyes.";
+          const text = response.text?.trim() || "";
+          if (text) {
+            pushServerLog({
+              category: 'PHOTO_LIKENESS',
+              level: 'success',
+              title: `Vision likeness for '${name || 'Hero'}'`,
+              details: `Model: ${model}\n\n${text}`,
+              model,
+            });
+            return { text, modelUsed: model };
+          }
         } catch (e) {
           lastErr = e;
           console.warn(`[Server photo likeness] Failed with model ${model}, trying backup...`);
@@ -938,9 +1054,15 @@ Write a single, highly descriptive physical blueprint paragraph in English. Outp
       }
       throw lastErr || new Error("All photo likeness models failed.");
     });
-    res.json({ text: resultText });
+    res.json({ text: result.text, modelUsed: result.modelUsed });
   } catch (err: any) {
     console.error("[Server photo likeness] Failed:", err);
+    pushServerLog({
+      category: 'PHOTO_LIKENESS',
+      level: 'error',
+      title: `Photo likeness FAILED for '${name || 'Hero'}'`,
+      details: err.message || "Failed to analyze photo likeness",
+    });
     res.status(500).json({ error: err.message || "Failed to analyze photo likeness" });
   }
 });
@@ -1087,11 +1209,6 @@ Character Cast Details:
             let physicalLikenessExtra = "";
             if (c.visualPrompt) {
               physicalLikenessExtra = ` (VERY IMPORTANT: This character has a pre-rendered avatar. You MUST use these exact visual details verbatim for this character and their panel scene descriptions to ensure total character model likeness: ${c.visualPrompt})`;
-            } else if (c.photoUrls && c.photoUrls.length > 0) {
-              const staticLikenessDetail = getStaticLikenessOfUrl(c.photoUrls[0]);
-              if (staticLikenessDetail) {
-                physicalLikenessExtra = ` (Physical Appearance based on Reference Photo: ${staticLikenessDetail})`;
-              }
             }
             baseInstruction += `- Name: ${c.name} (${c.role || 'Hero'}). Description: ${c.description || ''}.${physicalLikenessExtra}\n`;
           });
@@ -1398,7 +1515,7 @@ TEXT: "${prompt}"`,
 STYLE: This must be a magnificent graphic novel comic illustration rendered in ${targetStyle} style: ${baseStyle}.
 CONSISTENCY RULES: The character(s) drawn MUST look exactly like the specific visual blueprints and physical details given in the PROMPT section. Keep their face details, gender, skin likeness, precise hair style and hair color, clothing outfits, and accessories completely identical to maintain perfect character model consistency. No written words or speech balloons. ${extraRequirements}`;
 
-      return await generateImageWithFallback(fullPanelPrompt, "1:1", selectedEngine, hfModel, geminiModel, pollinationsModel, autoFallback);
+      return await generateImageWithFallback(fullPanelPrompt, "1:1", selectedEngine, hfModel, geminiModel, pollinationsModel, autoFallback, 'PANEL_GEN');
     });
     recordModelUsage('panel', prompt || 'Comic Panel', selectedEngine, resultUrl.modelUsed, 'success');
     res.json({ imageUrl: resultUrl.imageUrl, modelUsed: resultUrl.modelUsed });
@@ -1421,8 +1538,32 @@ app.post("/api/gemini/generate-character-image", async (req, res) => {
   const targetStyle = artStyle || 'vibrant';
   const selectedEngine = imageEngine === 'huggingface' ? 'huggingface' : imageEngine === 'pollinations' ? 'pollinations' : 'gemini';
   const autoFallback = allowAutoFallback === true;
+  const requestedModel =
+    selectedEngine === 'huggingface'
+      ? `hf-${hfModel || 'black-forest-labs/FLUX.1-schnell'}`
+      : selectedEngine === 'pollinations'
+      ? `pollinations-${pollinationsModel || 'flux'}`
+      : (geminiModel || 'gemini-3.1-flash-image');
+
+  pushServerLog({
+    category: 'AVATAR_GEN',
+    level: 'info',
+    title: `Avatar API request received for '${name || 'Character'}'`,
+    details: [
+      `Engine: ${selectedEngine}`,
+      `Requested model: ${requestedModel}`,
+      `Art style: ${targetStyle}`,
+      `AutoFallback: ${autoFallback ? 'ON' : 'OFF'}`,
+      `Incoming description (${(description || '').length} chars):`,
+      description || '(empty)',
+    ].join('\n'),
+    model: requestedModel,
+  });
 
   try {
+    let finalPromptUsed = '';
+    let isChildFlag = false;
+
     const resultUrl = await withRetry(async () => {
       // Step 1: translate description if needed
       let englishDesc = description;
@@ -1453,6 +1594,7 @@ app.post("/api/gemini/generate-character-image", async (req, res) => {
       }
 
       const isChild = isCharacterChild(englishDesc, name);
+      isChildFlag = isChild;
 
       const stylePrompts: Record<string, string> = {
         vibrant: "Graphic novel style character portrait illustration, vibrant colors, clean lines",
@@ -1480,10 +1622,60 @@ app.post("/api/gemini/generate-character-image", async (req, res) => {
         finalPrompt = `${stylePrefix}. Close-up character portrait of an adult named ${name_clean(name)}. The adult has clear, structured mature facial details, realistic adult features, and an expressive natural adult look. Physical description: ${englishDesc}. Simple minimalist studio backdrop. Clean artistic style, focused, looking forward.`;
       }
 
-      return await generateImageWithFallback(finalPrompt, "1:1", selectedEngine, hfModel, geminiModel, pollinationsModel, autoFallback);
+      finalPromptUsed = finalPrompt;
+
+      pushServerLog({
+        category: 'AVATAR_GEN',
+        level: 'info',
+        title: `Avatar FINAL PROMPT sent to ${selectedEngine} for '${name || 'Character'}'`,
+        details: [
+          `Character: ${name || '(unnamed)'}`,
+          `IsChild: ${isChild}`,
+          `Art style: ${targetStyle}`,
+          `Engine: ${selectedEngine}`,
+          `Model: ${requestedModel}`,
+          `Aspect: 1:1`,
+          `AutoFallback: ${autoFallback ? 'ON' : 'OFF'}`,
+          ``,
+          `--- FULL IMAGE PROMPT (${finalPrompt.length} chars) ---`,
+          finalPrompt,
+        ].join('\n'),
+        model: requestedModel,
+      });
+
+      console.log(`[Server Char Portrait] FINAL PROMPT for '${name}':\n${finalPrompt}`);
+
+      return await generateImageWithFallback(finalPrompt, "1:1", selectedEngine, hfModel, geminiModel, pollinationsModel, autoFallback, 'AVATAR_GEN');
     });
     recordModelUsage('avatar', name || 'Character Avatar', selectedEngine, resultUrl.modelUsed, 'success');
-    res.json({ imageUrl: resultUrl.imageUrl, modelUsed: resultUrl.modelUsed });
+    pushServerLog({
+      category: 'AVATAR_GEN',
+      level: 'success',
+      title: `Avatar image payload ready for '${name || 'Character'}'`,
+      details: [
+        `Model used: ${resultUrl.modelUsed}`,
+        `IsChild: ${isChildFlag}`,
+        `Prompt length: ${finalPromptUsed.length}`,
+        resultUrl.imageUrl?.startsWith('data:')
+          ? `Returned: base64 image (${Math.round((resultUrl.imageUrl.length || 0) / 1024)} KB)`
+          : `Returned URL: ${(resultUrl.imageUrl || '').substring(0, 120)}...`,
+      ].join('\n'),
+      model: resultUrl.modelUsed,
+    });
+    res.json({
+      imageUrl: resultUrl.imageUrl,
+      modelUsed: resultUrl.modelUsed,
+      promptUsed: finalPromptUsed,
+      request: {
+        name,
+        artStyle: targetStyle,
+        imageEngine: selectedEngine,
+        model: requestedModel,
+        aspectRatio: '1:1',
+        allowAutoFallback: autoFallback,
+        isChild: isChildFlag,
+      },
+    });
   } catch (err: any) {
     const errMsg = err?.message || "Character portrait generation failed";
     console.error("[Server Char Portrait] Generation failed:", errMsg);
@@ -1493,6 +1685,13 @@ app.post("/api/gemini/generate-character-image", async (req, res) => {
       ? `${geminiModel || 'gemini-3.1-flash-image'} (Failed)` 
       : `pollinations-${pollinationsModel || 'flux'} (Failed)`;
     recordModelUsage('avatar', req.body?.name || 'Character Avatar', selectedEngine, failedModel, autoFallback ? 'fallback' : 'failed');
+    pushServerLog({
+      category: 'AVATAR_GEN',
+      level: 'error',
+      title: `Avatar generation FAILED for '${name || 'Character'}'`,
+      details: errMsg,
+      model: failedModel,
+    });
     res.status(500).json({ error: errMsg });
   }
 });
@@ -1861,11 +2060,34 @@ async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     // Development mode setup with Vite dev server middleware
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        // HMR remounts App mid-generation and dumps users back to story/layout.
+        // Enable only with ENABLE_HMR=true.
+        hmr: process.env.ENABLE_HMR === 'true',
+        watch:
+          process.env.ENABLE_HMR === 'true'
+            ? {
+                ignored: [
+                  '**/model_usage_history.json',
+                  '**/.data/**',
+                  '**/server.ts',
+                  '**/.env',
+                  '**/.env.*',
+                  '**/node_modules/**',
+                  '**/.git/**',
+                ],
+              }
+            : null,
+      },
       appType: "spa",
     });
     app.use(vite.middlewares);
-    console.log("[Server] Vite development middleware mounted successfully.");
+    console.log(
+      `[Server] Vite development middleware mounted successfully. (HMR: ${
+        process.env.ENABLE_HMR === 'true' ? 'ON' : 'OFF'
+      })`
+    );
   } else {
     // Production mode - Serve bundled client build files statically
     const distPath = path.join(process.cwd(), "dist");

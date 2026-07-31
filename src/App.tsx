@@ -36,7 +36,7 @@ import {
 } from 'lucide-react';
 import { cn } from './lib/utils';
 import { Language, PanelLayout, ComicStory, CharacterCasting, Panel, ArtStyle, VoicePersona } from './types';
-import { decomposeStory, generatePanelImage, generateCharacterImage, describePhotoLikeness, translateToEnglishIfNeeded, ImageEngine, getActiveImageEngine, setActiveImageEngine, getActiveHfSubModel, setActiveHfSubModel, HuggingFaceSubModel, GeminiImageSubModel, getActiveGeminiSubModel, setActiveGeminiSubModel, PollinationsSubModel, getActivePollinationsSubModel, setActivePollinationsSubModel, getAutoFallbackEnabled, setAutoFallbackEnabled, StoryEngine, GeminiStorySubModel, HfStorySubModel, getActiveStoryEngine, setActiveStoryEngine, getActiveGeminiStorySubModel, setActiveGeminiStorySubModel, getActiveHfStorySubModel, setActiveHfStorySubModel } from './services/gemini';
+import { decomposeStory, generatePanelImage, generateCharacterImage, describePhotoLikeness, translateToEnglishIfNeeded, ImageEngine, getActiveImageEngine, setActiveImageEngine, getActiveHfSubModel, setActiveHfSubModel, HuggingFaceSubModel, GeminiImageSubModel, getActiveGeminiSubModel, setActiveGeminiSubModel, PollinationsSubModel, getActivePollinationsSubModel, setActivePollinationsSubModel, getAutoFallbackEnabled, setAutoFallbackEnabled, StoryEngine, GeminiStorySubModel, HfStorySubModel, getActiveStoryEngine, setActiveStoryEngine, getActiveGeminiStorySubModel, setActiveGeminiStorySubModel, getActiveHfStorySubModel, setActiveHfStorySubModel, subscribeEngineSettings } from './services/gemini';
 import { IMAGE_MODELS } from './config/models';
 import { speak, playComicSound } from './lib/voice';
 import { exportToPdf } from './lib/pdf';
@@ -48,6 +48,8 @@ import { ModelReportModal } from './components/ModelReportModal';
 import { FLiteTextureModelCard } from './components/FLiteTextureModelCard';
 import { StandaloneLogConsole } from './components/StandaloneLogConsole';
 import { PerchanceModal } from './components/PerchanceModal';
+import { attachUiActionLogging, logFlow } from './services/flowLogger';
+import { logger } from './services/logger';
 import { 
   getStoredLibrary, 
   saveStoryToDB, 
@@ -60,6 +62,99 @@ type Step = 'landing' | 'story' | 'casting' | 'layout' | 'generating' | 'reader'
 
 const VERSION_NUMBER = 'v1.1.0';
 const BUILD_NUMBER = '2026.07.27.01';
+const SESSION_STORAGE_KEY = 'comicskido_last_story';
+
+type SavedSession = {
+  storyText?: string;
+  characters?: CharacterCasting[];
+  layout?: PanelLayout;
+  artStyle?: ArtStyle;
+  voicePersona?: VoicePersona;
+  photoPool?: string[];
+  language?: Language;
+  enableAnimations?: boolean;
+  accentColor?: string;
+  step?: Step;
+  comic?: ComicStory | null;
+  totalTokens?: number;
+  aiStats?: any;
+  activePanel?: number;
+};
+
+function readSavedSession(): SavedSession | null {
+  try {
+    const raw = localStorage.getItem(SESSION_STORAGE_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    return data && typeof data === 'object' ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveRestoredStep(step: Step | undefined): Step {
+  if (!step || step === 'landing') return 'landing';
+  // Don't restore into a stuck generating spinner after a reload
+  if (step === 'generating') return 'layout';
+  return step;
+}
+
+function stripHeavyImageData(value: string | undefined): string | undefined {
+  if (!value) return value;
+  // Keep remote http(s) thumbs; drop huge base64 payloads that explode localStorage
+  if (value.startsWith('data:')) return undefined;
+  return value;
+}
+
+function slimSessionForStorage(state: {
+  storyText: string;
+  characters: CharacterCasting[];
+  layout: PanelLayout;
+  artStyle: ArtStyle;
+  voicePersona: VoicePersona;
+  photoPool: string[];
+  language: Language;
+  enableAnimations: boolean;
+  accentColor: string;
+  step: Step;
+  comic: ComicStory | null;
+  totalTokens: number;
+  aiStats: any;
+  activePanel: number;
+}) {
+  return {
+    ...state,
+    // Prefer story text; never persist megabytes of panel/avatar base64 mid-generation
+    photoPool: (state.photoPool || [])
+      .map(stripHeavyImageData)
+      .filter((u): u is string => !!u)
+      .slice(0, 24),
+    characters: (state.characters || []).map((c) => ({
+      ...c,
+      photoUrls: (c.photoUrls || [])
+        .map(stripHeavyImageData)
+        .filter((u): u is string => !!u),
+      drawnPortraitUrl: stripHeavyImageData(c.drawnPortraitUrl),
+    })),
+    comic: state.comic
+      ? {
+          ...state.comic,
+          panels: (state.comic.panels || []).map((p) => ({
+            ...p,
+            // Keep panel text/layout; drop image bytes from session draft
+            imageUrl: stripHeavyImageData(p.imageUrl) || '',
+          })),
+          characters: (state.comic.characters || []).map((c) => ({
+            ...c,
+            photoUrls: (c.photoUrls || [])
+              .map(stripHeavyImageData)
+              .filter((u): u is string => !!u),
+            drawnPortraitUrl: stripHeavyImageData(c.drawnPortraitUrl),
+          })),
+        }
+      : null,
+  };
+}
 
 export default function App() {
   const [isStandaloneLogsView, setIsStandaloneLogsView] = useState(() => {
@@ -74,7 +169,26 @@ export default function App() {
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
-  const [step, setStep] = useState<Step>('landing');
+  const [step, setStep] = useState<Step>(() => resolveRestoredStep(readSavedSession()?.step));
+  const stepRef = useRef<Step>(step);
+  const sessionHydratedRef = useRef(true); // session fields hydrate synchronously from localStorage
+  useEffect(() => {
+    stepRef.current = step;
+  }, [step]);
+
+  // Record every UI click / control change + step transitions in Live Terminal (category: UI)
+  useEffect(() => {
+    return attachUiActionLogging(() => stepRef.current);
+  }, []);
+
+  const prevStepLoggedRef = useRef<Step | null>(null);
+  useEffect(() => {
+    // Skip duplicate StrictMode remount logs for the same step
+    if (prevStepLoggedRef.current === step) return;
+    prevStepLoggedRef.current = step;
+    logFlow(`Flow → ${step}`, `User is now on the "${step}" screen`);
+  }, [step]);
+
   const [imageEngine, setImageEngineState] = useState<ImageEngine>(() => getActiveImageEngine());
   const [hfSubModel, setHfSubModelState] = useState<HuggingFaceSubModel>(() => getActiveHfSubModel());
   const [geminiSubModel, setGeminiSubModelState] = useState<GeminiImageSubModel>(() => getActiveGeminiSubModel());
@@ -85,14 +199,43 @@ export default function App() {
   const [geminiStorySubModel, setGeminiStorySubModelState] = useState<GeminiStorySubModel>(() => getActiveGeminiStorySubModel());
   const [hfStorySubModel, setHfStorySubModelState] = useState<HfStorySubModel>(() => getActiveHfStorySubModel());
 
+  // Keep main toolbar engines in sync with WinAdmin / Live Terminal controls
+  useEffect(() => {
+    return subscribeEngineSettings((settings) => {
+      setImageEngineState(settings.imageEngine);
+      setHfSubModelState(settings.hfSubModel);
+      setGeminiSubModelState(settings.geminiSubModel);
+      setPollinationsSubModelState(settings.pollinationsSubModel);
+      setAutoFallbackState(settings.autoFallback);
+      setStoryEngineState(settings.storyEngine);
+      setGeminiStorySubModelState(settings.geminiStorySubModel);
+      setHfStorySubModelState(settings.hfStorySubModel);
+      setAiStats(prev => ({
+        ...prev,
+        imageModelName:
+          settings.imageEngine === 'huggingface'
+            ? `hf-${settings.hfSubModel}`
+            : settings.imageEngine === 'pollinations'
+            ? `pollinations-${settings.pollinationsSubModel}`
+            : settings.geminiSubModel,
+        textModelName:
+          settings.storyEngine === 'huggingface'
+            ? `hf-${settings.hfStorySubModel}`
+            : settings.geminiStorySubModel,
+      }));
+    });
+  }, []);
+
   const handleSetAutoFallback = (enabled: boolean) => {
     setAutoFallbackState(enabled);
     setAutoFallbackEnabled(enabled);
+    logFlow(`Auto-fallback ${enabled ? 'ON' : 'OFF'}`, `Image engine auto-fallback preference changed`);
   };
 
   const handleSetImageEngine = (engine: ImageEngine) => {
     setImageEngineState(engine);
     setActiveImageEngine(engine);
+    logFlow(`Image engine → ${engine}`, `Active image creation engine switched to ${engine}`);
     setAiStats(prev => ({
       ...prev,
       imageModelName: engine === 'huggingface' ? `hf-${hfSubModel}` : engine === 'pollinations' ? `pollinations-${pollinationsSubModel}` : geminiSubModel
@@ -129,6 +272,7 @@ export default function App() {
   const handleSetStoryEngine = (engine: StoryEngine) => {
     setStoryEngineState(engine);
     setActiveStoryEngine(engine);
+    logFlow(`Story engine → ${engine}`, `Story decomposition engine switched to ${engine}`);
     setAiStats(prev => ({
       ...prev,
       textModelName: engine === 'huggingface' ? `hf-${hfStorySubModel}` : geminiStorySubModel
@@ -152,36 +296,49 @@ export default function App() {
       textModelName: `hf-${model}`
     }));
   };
-  const [enableAnimations, setEnableAnimations] = useState(true);
-  const [accentColor, setAccentColor] = useState('#FF6321');
-  const [language, setLanguage] = useState<Language>('en');
-  const [storyText, setStoryText] = useState('');
-  const [photoPool, setPhotoPool] = useState<string[]>([
-    'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=150&auto=format&fit=crop&q=80', // Girl with red hair and glasses
-    'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=150&auto=format&fit=crop&q=80', // Adventurous brown hair boy
-    'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150&auto=format&fit=crop&q=80', // Smiling happy girl
-    'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80', // Laughing toddler boy
-    'https://images.unsplash.com/photo-1543466835-00a7907e9de1?w=150&auto=format&fit=crop&q=80'  // Fluffy golden dog sidekick
-  ]);
-  const [characters, setCharacters] = useState<CharacterCasting[]>([
-    {
-      role: 'protagonist',
-      name: '',
-      photoUrls: [],
-      description: 'A brave child with an adventurous spirit.'
-    }
-  ]);
-  const [layout, setLayout] = useState<PanelLayout>(4);
-  const [artStyle, setArtStyle] = useState<ArtStyle>('vibrant');
-  const [voicePersona, setVoicePersona] = useState<VoicePersona>('storyteller');
-  const [comic, setComic] = useState<ComicStory | null>(null);
-  const [totalTokens, setTotalTokens] = useState(0);
+
+  const initialSession = useRef<SavedSession | null>(readSavedSession()).current;
+
+  const [enableAnimations, setEnableAnimations] = useState(
+    initialSession?.enableAnimations !== undefined ? initialSession.enableAnimations : true
+  );
+  const [accentColor, setAccentColor] = useState(initialSession?.accentColor || '#FF6321');
+  const [language, setLanguage] = useState<Language>(initialSession?.language || 'en');
+  const [storyText, setStoryText] = useState(initialSession?.storyText || '');
+  const [photoPool, setPhotoPool] = useState<string[]>(
+    initialSession?.photoPool?.length
+      ? initialSession.photoPool
+      : [
+          'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=300&auto=format&fit=crop&q=80',
+          'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=300&auto=format&fit=crop&q=80',
+          'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=300&auto=format&fit=crop&q=80',
+          'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300&auto=format&fit=crop&q=80',
+          'https://images.unsplash.com/photo-1543466835-00a7907e9de1?w=300&auto=format&fit=crop&q=80',
+        ]
+  );
+  const [characters, setCharacters] = useState<CharacterCasting[]>(
+    initialSession?.characters?.length
+      ? initialSession.characters
+      : [
+          {
+            role: 'protagonist',
+            name: '',
+            photoUrls: [],
+            description: 'A brave adventurous spirit.'
+          }
+        ]
+  );
+  const [layout, setLayout] = useState<PanelLayout>(initialSession?.layout || 4);
+  const [artStyle, setArtStyle] = useState<ArtStyle>(initialSession?.artStyle || 'vibrant');
+  const [voicePersona, setVoicePersona] = useState<VoicePersona>(initialSession?.voicePersona || 'storyteller');
+  const [comic, setComic] = useState<ComicStory | null>(initialSession?.comic || null);
+  const [totalTokens, setTotalTokens] = useState(initialSession?.totalTokens || 0);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [showTerminalLogs, setShowTerminalLogs] = useState(false);
   const [showModelReportModal, setShowModelReportModal] = useState(false);
   const [showFLiteTextureModal, setShowFLiteTextureModal] = useState(false);
   const [showPerchanceModal, setShowPerchanceModal] = useState(false);
-  const [aiStats, setAiStats] = useState({
+  const [aiStats, setAiStats] = useState(() => initialSession?.aiStats || {
     textPromptTokens: 0,
     textCompletionTokens: 0,
     textCalls: 0,
@@ -193,7 +350,7 @@ export default function App() {
     lastApiStatus: 'Ready / Idle'
   });
   const [isGenerating, setIsGenerating] = useState(false);
-  const [activePanel, setActivePanel] = useState(0);
+  const [activePanel, setActivePanel] = useState(initialSession?.activePanel || 0);
   const [generationError, setGenerationError] = useState<string | null>(null);
   const [generationProgress, setGenerationProgress] = useState(0);
   const [quotaCountdown, setQuotaCountdown] = useState<number | null>(null);
@@ -334,10 +491,20 @@ export default function App() {
     setCharacters(prev => {
       const n = [...prev];
       const currentUrls = n[charIndex].photoUrls || [];
-      if (currentUrls.includes(photoUrl)) {
-        n[charIndex] = { ...n[charIndex], photoUrls: currentUrls.filter(u => u !== photoUrl) };
+      if (currentUrls.includes(photoUrl) && currentUrls[0] === photoUrl && currentUrls.length === 1) {
+        // Clicking the active photo again deselects it
+        n[charIndex] = {
+          ...n[charIndex],
+          photoUrls: [],
+          drawnPortraitUrl: undefined,
+        };
       } else {
-        n[charIndex] = { ...n[charIndex], photoUrls: [...currentUrls, photoUrl] };
+        // Single primary reference photo — what you see is what gets analyzed
+        n[charIndex] = {
+          ...n[charIndex],
+          photoUrls: [photoUrl],
+          drawnPortraitUrl: undefined,
+        };
       }
       return n;
     });
@@ -372,20 +539,34 @@ export default function App() {
 
   const [isDrawnPortraitGenerating, setIsDrawnPortraitGenerating] = useState(false);
 
-  const drawCharacterPortraitOnDemand = async (charIndex: number) => {
+  const drawCharacterPortraitOnDemand = async (charIndex: number | null) => {
     if (charIndex === null || !characters[charIndex]) return;
+    const targetIndex = charIndex;
+    const char = characters[targetIndex];
     setIsDrawnPortraitGenerating(true);
-    const char = characters[charIndex];
+    // Clear the RIGHT avatar slot immediately so redraw visibly replaces the old image
+    setCharacters(prev =>
+      prev.map((c, idx) => (idx === targetIndex ? { ...c, drawnPortraitUrl: undefined } : c))
+    );
+    logFlow(
+      `Draw portrait: ${char.name || 'Hero'}`,
+      `Char #${targetIndex + 1} | Photos: ${char.photoUrls?.length || 0} | Engine: ${imageEngine}`
+    );
     try {
-      let visualPrompt = char.description;
+      let visualPrompt = char.description || "";
       
-      // Analyze physical portrait traits from photo first if one is present!
+      // Analyze physical portrait traits from the active reference photo
       if (char.photoUrls && char.photoUrls.length > 0) {
         try {
-          // Analyze likeness multimodally using Gemini 3.5 Flash inside describePhotoLikeness
           const likenessDesc = await describePhotoLikeness(char.photoUrls[0], char.name || "Hero");
-          if (likenessDesc) {
-            visualPrompt = `${likenessDesc}. ${char.description}`;
+          if (likenessDesc && likenessDesc.trim()) {
+            // Photo likeness WINS for appearance (hair, age, face). Traits are personality-only hints.
+            visualPrompt = [
+              likenessDesc.trim(),
+              char.description?.trim()
+                ? `Personality/story traits only (do NOT change hair color, age, or face from the photo): ${char.description.trim()}`
+                : "",
+            ].filter(Boolean).join(" ");
           }
         } catch (err) {
           console.error("Failed to analyze photo likeness, falling back to description", err);
@@ -406,7 +587,13 @@ export default function App() {
           console.error("Failed to compress portrait", shrinkErr);
         }
 
-        setCharacters(prev => prev.map((c, idx) => idx === charIndex ? { ...c, drawnPortraitUrl: compressedUrl, visualPrompt: englishVisualPrompt } : c));
+        setCharacters(prev =>
+          prev.map((c, idx) =>
+            idx === targetIndex
+              ? { ...c, drawnPortraitUrl: compressedUrl, visualPrompt: englishVisualPrompt }
+              : c
+          )
+        );
         
         setAiStats(prev => ({
           ...prev,
@@ -454,7 +641,7 @@ export default function App() {
       try {
         await clearEntireLibraryFromDB();
         localStorage.removeItem('comicskido_library_v1'); // Clean up old storage space
-        localStorage.removeItem('comicskido_last_story');
+        localStorage.removeItem(SESSION_STORAGE_KEY);
         setSavedStories([]);
         await updateStorageUsage();
       } catch (e) {
@@ -586,9 +773,15 @@ export default function App() {
 
   // Persistence logic
   const saveState = () => {
+    if (!sessionHydratedRef.current) return;
     try {
-      const stateToSave = {
-        storyText,
+      // Never overwrite a saved story with an empty one (reload race / StrictMode)
+      const existing = readSavedSession();
+      const storyToSave =
+        storyText.trim() || existing?.storyText || '';
+
+      const stateToSave = slimSessionForStorage({
+        storyText: storyToSave,
         characters,
         layout,
         artStyle,
@@ -597,23 +790,35 @@ export default function App() {
         language,
         enableAnimations,
         accentColor,
-        step,
+        // Don't persist "generating" — remount would dump users into a broken spinner
+        step: step === 'generating' ? 'layout' : step,
         comic,
         totalTokens,
         aiStats,
         activePanel
-      };
-      localStorage.setItem('comicskido_last_story', JSON.stringify(stateToSave));
+      });
+      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(stateToSave));
     } catch (e) {
       console.warn("Failed to save state to localStorage", e);
+      // Last-ditch: preserve at least the story text so Generate doesn't say "empty"
+      try {
+        const existing = readSavedSession();
+        localStorage.setItem(
+          SESSION_STORAGE_KEY,
+          JSON.stringify({
+            ...(existing || {}),
+            storyText: storyText.trim() || existing?.storyText || '',
+            step: step === 'generating' ? 'layout' : step,
+          })
+        );
+      } catch (_) {}
     }
   };
 
   const loadState = () => {
-    const saved = localStorage.getItem('comicskido_last_story');
-    if (saved) {
+    const data = readSavedSession();
+    if (data) {
       try {
-        const data = JSON.parse(saved);
         setStoryText(data.storyText || '');
         setCharacters(data.characters || []);
         setLayout(data.layout || 4);
@@ -635,36 +840,13 @@ export default function App() {
     return false;
   };
 
-  // Auto-restore active session from localStorage on startup to prevent "disconnected" state loss on iframe refresh
+  // Mark session hydrated after first paint so autosave cannot wipe storyText on remount
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem('comicskido_last_story');
-      if (saved) {
-        const data = JSON.parse(saved);
-        if (data.step && data.step !== 'landing') {
-          // If they were on 'generating', restore them to 'story' so they don't get stuck in a loader
-          const restoredStep = data.step === 'generating' ? 'story' : data.step;
-          setStep(restoredStep);
-          
-          if (data.storyText) setStoryText(data.storyText);
-          if (data.characters) setCharacters(data.characters);
-          if (data.layout) setLayout(data.layout);
-          if (data.artStyle) setArtStyle(data.artStyle);
-          if (data.voicePersona) setVoicePersona(data.voicePersona);
-          if (data.photoPool) setPhotoPool(data.photoPool);
-          if (data.language) setLanguage(data.language);
-          if (data.enableAnimations !== undefined) setEnableAnimations(data.enableAnimations);
-          if (data.accentColor) setAccentColor(data.accentColor);
-          if (data.comic) setComic(data.comic);
-          if (data.totalTokens !== undefined) setTotalTokens(data.totalTokens);
-          if (data.aiStats) setAiStats(data.aiStats);
-          if (data.activePanel !== undefined) setActivePanel(data.activePanel);
-          
-          console.log(`Auto-restored session on step: ${restoredStep}`);
-        }
-      }
-    } catch (e) {
-      console.warn("Failed to auto-restore active session from localStorage", e);
+    sessionHydratedRef.current = true;
+    const saved = readSavedSession();
+    if (saved?.storyText && !storyText.trim()) {
+      setStoryText(saved.storyText);
+      logFlow('Restored story text', `Recovered ${saved.storyText.length} chars from session after reload`);
     }
   }, []);
 
@@ -802,6 +984,41 @@ export default function App() {
   };
 
   const startGeneration = async () => {
+    const resolvedStory =
+      storyText.trim() ||
+      readSavedSession()?.storyText?.trim() ||
+      '';
+
+    logFlow(
+      'Start comic generation',
+      `Layout: ${layout} panels | Style: ${artStyle} | Image engine: ${imageEngine} | Story engine: ${storyEngine} | Story chars: ${resolvedStory.length}`
+    );
+
+    if (!resolvedStory) {
+      logger.addLog({
+        category: 'STORY',
+        level: 'error',
+        title: 'Story Decomposition blocked — story text is empty',
+        details: [
+          `Step: ${step}`,
+          `React storyText length: ${storyText.length}`,
+          `Session storyText length: ${readSavedSession()?.storyText?.length ?? 0}`,
+          `Characters: ${characters.map(c => c.name || '(unnamed)').join(', ') || '(none)'}`,
+          'User was sent back to the Story step to paste/write the story again.',
+        ].join('\n'),
+      });
+      setGenerationError('Story text is empty');
+      setIsGenerating(false);
+      setStep('story');
+      return;
+    }
+
+    // Heal in-memory story if it was lost after a reload but still in session storage
+    if (!storyText.trim() && resolvedStory) {
+      setStoryText(resolvedStory);
+      logFlow('Healed empty storyText', `Restored ${resolvedStory.length} chars from session before generate`);
+    }
+
     setStep('generating');
     setIsGenerating(true);
     setGenerationError(null);
@@ -824,11 +1041,9 @@ export default function App() {
     }, 450);
 
     try {
-      if (!storyText.trim()) throw new Error("Story text is empty");
-
       const textCallStartTime = Date.now();
       const activeStoryModel = storyEngine === 'huggingface' ? hfStorySubModel : geminiStorySubModel;
-      const resultPromise = decomposeStory(storyText, language, layout, characters, storyEngine, activeStoryModel);
+      const resultPromise = decomposeStory(resolvedStory, language, layout, characters, storyEngine, activeStoryModel);
       const result = await Promise.race([resultPromise, timeoutPromise]) as any;
       const textCallDuration = Date.now() - textCallStartTime;
       
@@ -881,8 +1096,13 @@ export default function App() {
                 if (char.photoUrls && char.photoUrls.length > 0) {
                   try {
                     const likenessDesc = await describePhotoLikeness(char.photoUrls[0], char.name);
-                    if (likenessDesc) {
-                      referencePrompt = `${likenessDesc}. ${char.description}`;
+                    if (likenessDesc && likenessDesc.trim()) {
+                      referencePrompt = [
+                        likenessDesc.trim(),
+                        char.description?.trim()
+                          ? `Personality/story traits only (do NOT change hair color, age, or face from the photo): ${char.description.trim()}`
+                          : "",
+                      ].filter(Boolean).join(" ");
                     }
                   } catch (err) {
                     console.error("Failed to analyze photo likeness for background avatar", err);
@@ -1035,7 +1255,14 @@ export default function App() {
       console.error("Generation failed:", error);
       clearInterval(progressInterval);
       setIsGenerating(false);
-      setGenerationError(error instanceof Error ? error.message : "Oops! The AI got a bit shy. Please check your setup or try again.");
+      const message = error instanceof Error ? error.message : "Oops! The AI got a bit shy. Please check your setup or try again.";
+      logger.addLog({
+        category: 'STORY',
+        level: 'error',
+        title: 'Story / generation failed',
+        details: message,
+      });
+      setGenerationError(message);
     }
   };
 
@@ -1516,7 +1743,7 @@ export default function App() {
                       {isRTL ? <ArrowLeft size={18} className="group-hover:-translate-x-1 transition-transform" /> : <ArrowRight size={18} className="group-hover:translate-x-1 transition-transform" />}
                     </button>
                     
-                    {localStorage.getItem('comicskido_last_story') && (
+                    {localStorage.getItem(SESSION_STORAGE_KEY) && (
                       <button 
                         onClick={() => {
                           if (loadState()) setStep('story');
@@ -1969,12 +2196,12 @@ export default function App() {
                       />
                     </div>
 
-                    {/* Main Character Image & Generated Cartoon Side-by-Side */}
-                    <div className="grid grid-cols-2 gap-3 mb-3">
-                      {/* Left Side: Uploaded reference photo */}
+                    {/* Photo (LEFT) + AI Avatar (RIGHT) — always LTR so sides never swap in Hebrew */}
+                    <div className="grid grid-cols-2 gap-3 mb-3" dir="ltr">
+                      {/* LEFT: Uploaded reference photo */}
                       <div className="aspect-square bg-gray-50 border-3 border-black rounded-xl overflow-hidden flex flex-col items-center justify-center relative">
                         <div className="absolute top-1.5 left-1.5 bg-black text-white px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-wider z-10">
-                          {language === 'he' ? "תמונת מקור" : "Reference"}
+                          {language === 'he' ? "1. תמונה" : "1. Photo"}
                         </div>
                         {characters[editingCharIndex].photoUrls && characters[editingCharIndex].photoUrls.length > 0 ? (
                           <>
@@ -1984,11 +2211,16 @@ export default function App() {
                               className="w-full h-full object-cover" 
                             />
                             <button
+                              type="button"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setCharacters(prev => {
                                   const n = [...prev];
-                                  n[editingCharIndex] = { ...n[editingCharIndex], photoUrls: [] };
+                                  n[editingCharIndex] = {
+                                    ...n[editingCharIndex],
+                                    photoUrls: [],
+                                    drawnPortraitUrl: undefined,
+                                  };
                                   return n;
                                 });
                               }}
@@ -2008,35 +2240,42 @@ export default function App() {
                         )}
                       </div>
 
-                      {/* Right Side: Generated Cartoon Avatar */}
+                      {/* RIGHT: Generated AI Avatar (replaced on every Redraw) */}
                       <div className="aspect-square bg-gray-100 border-3 border-black rounded-xl overflow-hidden flex flex-col items-center justify-center relative">
                         <div className="absolute top-1.5 left-1.5 bg-[#FF6321] text-white px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-wider z-10">
-                          {language === 'he' ? "אווטאר" : "Manga"}
+                          {language === 'he' ? "2. אווטאר AI" : "2. AI Avatar"}
                         </div>
                         {characters[editingCharIndex].drawnPortraitUrl ? (
                           <img 
+                            key={`avatar-${editingCharIndex}-${characters[editingCharIndex].drawnPortraitUrl.length}`}
                             src={characters[editingCharIndex].drawnPortraitUrl} 
-                            alt="Cartoon Avatar" 
+                            alt="AI Avatar" 
                             referrerPolicy="no-referrer"
-                            className="w-full h-full object-cover animate-fade-in" 
+                            className="w-full h-full object-cover animate-fade-in"
+                            onError={() => {
+                              console.error("Avatar image failed to display");
+                              setCharacters(prev => prev.map((c, idx) =>
+                                idx === editingCharIndex
+                                  ? { ...c, drawnPortraitUrl: undefined }
+                                  : c
+                              ));
+                            }}
                           />
-                        ) : (
-                          <div className="text-center p-1">
-                            {isDrawnPortraitGenerating ? (
-                              <div className="flex flex-col items-center gap-1">
-                                <Loader2 className="animate-spin text-accent" size={18} />
-                                <p className="font-bold text-[8px] uppercase animate-pulse">
-                                  {language === 'he' ? "מצייר..." : "AI Drawing..."}
-                                </p>
-                              </div>
-                            ) : (
-                              <div className="flex flex-col items-center gap-1 opacity-40">
-                                <Palette size={18} className="text-accent" />
-                                <p className="font-bold text-[8px] uppercase">
-                                  {language === 'he' ? "אין ציור" : "No Art"}
-                                </p>
-                              </div>
-                            )}
+                        ) : !isDrawnPortraitGenerating ? (
+                          <div className="flex flex-col items-center gap-1 opacity-40 p-1">
+                            <Palette size={18} className="text-accent" />
+                            <p className="font-bold text-[8px] uppercase text-center">
+                              {language === 'he' ? "לחץ צייר אווטאר" : "Click Render Avatar"}
+                            </p>
+                          </div>
+                        ) : null}
+
+                        {isDrawnPortraitGenerating && (
+                          <div className="absolute inset-0 z-20 bg-white/85 flex flex-col items-center justify-center gap-1.5">
+                            <Loader2 className="animate-spin text-accent" size={22} />
+                            <p className="font-black text-[9px] uppercase animate-pulse text-black">
+                              {language === 'he' ? "מצייר אווטאר..." : "Drawing avatar..."}
+                            </p>
                           </div>
                         )}
                       </div>

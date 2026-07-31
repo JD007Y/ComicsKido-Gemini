@@ -1,7 +1,9 @@
 export interface LogEntry {
   id: string;
   timestamp: string;
-  category: 'STORY' | 'PANEL_GEN' | 'AVATAR_GEN' | 'PHOTO_LIKENESS' | 'TRANSLATION' | 'SYSTEM' | 'SERVER';
+  /** Epoch ms — used to sort oldest → newest (first log on top). */
+  createdAt: number;
+  category: 'STORY' | 'PANEL_GEN' | 'AVATAR_GEN' | 'PHOTO_LIKENESS' | 'TRANSLATION' | 'SYSTEM' | 'SERVER' | 'UI';
   level: 'info' | 'warn' | 'error' | 'success';
   title: string;
   details?: string;
@@ -10,6 +12,41 @@ export interface LogEntry {
 }
 
 type LogListener = (entry: LogEntry) => void;
+
+/** Newest first (latest log on top). */
+export function sortLogsNewestFirst(logs: LogEntry[]): LogEntry[] {
+  return [...logs].sort((a, b) => {
+    const aAt = a.createdAt ?? 0;
+    const bAt = b.createdAt ?? 0;
+    if (aAt !== bAt) return bAt - aAt;
+    return b.id.localeCompare(a.id);
+  });
+}
+
+/** @deprecated use sortLogsNewestFirst */
+export function sortLogsOldestFirst(logs: LogEntry[]): LogEntry[] {
+  return sortLogsNewestFirst(logs).reverse();
+}
+
+function normalizeCachedLogs(raw: unknown): LogEntry[] {
+  if (!Array.isArray(raw) || raw.length === 0) return [];
+
+  const hasCreatedAt = raw.every(
+    (e: any) => typeof e?.createdAt === 'number' && e.createdAt > 0
+  );
+  if (hasCreatedAt) {
+    return sortLogsNewestFirst(raw as LogEntry[]);
+  }
+
+  // Legacy cache without createdAt — assume already newest-first (unshift era)
+  const ordered = [...raw];
+  const base = Date.now() - ordered.length * 1000;
+  return ordered.map((entry: any, index: number) => ({
+    ...entry,
+    // index 0 is newest → highest createdAt
+    createdAt: base + (ordered.length - 1 - index) * 1000,
+  }));
+}
 
 class LoggerService {
   private logs: LogEntry[] = [];
@@ -21,7 +58,7 @@ class LoggerService {
     try {
       const cached = localStorage.getItem('comicskido_client_logs');
       if (cached) {
-        this.logs = JSON.parse(cached);
+        this.logs = normalizeCachedLogs(JSON.parse(cached));
       }
     } catch (e) {
       console.warn('Failed to load cached logs', e);
@@ -31,6 +68,7 @@ class LoggerService {
       this.logs.push({
         id: 'init_sys',
         timestamp: new Date().toLocaleTimeString(),
+        createdAt: Date.now(),
         category: 'SYSTEM',
         level: 'info',
         title: 'Logger initialized',
@@ -46,8 +84,11 @@ class LoggerService {
           if (event.data?.type === 'ADD_LOG' && event.data?.entry) {
             const entry = event.data.entry as LogEntry;
             if (!this.logs.some(l => l.id === entry.id)) {
-              this.logs.unshift(entry);
-              if (this.logs.length > 250) this.logs.pop();
+              this.logs.unshift({
+                ...entry,
+                createdAt: entry.createdAt || Date.now(),
+              });
+              if (this.logs.length > 400) this.logs.pop();
               this.notifyListeners(entry);
             }
           } else if (event.data?.type === 'CLEAR_LOGS') {
@@ -55,6 +96,7 @@ class LoggerService {
             this.notifyListeners({
               id: 'clr',
               timestamp: new Date().toLocaleTimeString(),
+              createdAt: Date.now(),
               category: 'SYSTEM',
               level: 'info',
               title: 'Logs cleared',
@@ -67,20 +109,31 @@ class LoggerService {
     }
   }
 
-  addLog(entry: Omit<LogEntry, 'id' | 'timestamp'>): LogEntry {
+  addLog(entry: Omit<LogEntry, 'id' | 'timestamp' | 'createdAt'>): LogEntry {
     const fullEntry: LogEntry = {
       ...entry,
       id: Math.random().toString(36).substring(2, 9),
       timestamp: new Date().toLocaleTimeString(),
+      createdAt: Date.now(),
     };
-    this.logs.unshift(fullEntry); // newest first
-    if (this.logs.length > 250) {
+    this.logs.unshift(fullEntry); // newest first — latest log on top
+    if (this.logs.length > 400) {
       this.logs.pop();
     }
     
     try {
-      localStorage.setItem('comicskido_client_logs', JSON.stringify(this.logs.slice(0, 100)));
-    } catch (e) {}
+      // Keep only a slim recent slice in localStorage — full prompts blow the 5MB quota
+      // and then session saves fail, which looks like the app "crashed" back to the start.
+      const slim = this.logs.slice(0, 80).map((l) => ({
+        ...l,
+        details: l.details && l.details.length > 500 ? l.details.slice(0, 500) + '…' : l.details,
+      }));
+      localStorage.setItem('comicskido_client_logs', JSON.stringify(slim));
+    } catch (e) {
+      try {
+        localStorage.removeItem('comicskido_client_logs');
+      } catch (_) {}
+    }
 
     if (this.channel) {
       try {
@@ -93,7 +146,7 @@ class LoggerService {
   }
 
   getLogs(): LogEntry[] {
-    return [...this.logs];
+    return sortLogsNewestFirst(this.logs);
   }
 
   clearLogs() {
