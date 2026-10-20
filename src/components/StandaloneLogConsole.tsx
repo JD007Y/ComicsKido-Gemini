@@ -318,10 +318,11 @@ export const StandaloneLogConsole: React.FC = () => {
                   className="bg-purple-950 text-purple-100 border border-purple-800 rounded-full px-2.5 py-1 text-[10px] font-mono font-bold cursor-pointer hover:bg-purple-900 focus:outline-none transition-all"
                   title="Select Gemini model for story decomposition"
                 >
+                  <option value="gemini-3.8-flash">Gemini 3.8 Flash</option>
+                  <option value="gemini-3.7-flash">Gemini 3.7 Flash</option>
                   <option value="gemini-3.6-flash">Gemini 3.6 Flash</option>
                   <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
-                  <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash Lite</option>
-                  <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
+                  <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro</option>
                 </select>
               ) : (
                 <select
@@ -330,9 +331,12 @@ export const StandaloneLogConsole: React.FC = () => {
                   className="bg-zinc-900 text-amber-300 border border-zinc-700 rounded-full px-2.5 py-1 text-[10px] font-mono font-bold cursor-pointer hover:bg-zinc-800 focus:outline-none transition-all"
                   title="Select Hugging Face Open LLM"
                 >
-                  <option value="google/gemma-3-4b-it">Google Gemma 3 (4B)</option>
-                  <option value="meta-llama/Llama-3.2-3B-Instruct">Meta Llama 3.2 (3B)</option>
+                  <option value="Qwen/Qwen2.5-72B-Instruct">Qwen 2.5 (72B)</option>
+                  <option value="meta-llama/Llama-3.3-70B-Instruct">Llama 3.3 (70B)</option>
                   <option value="Qwen/Qwen2.5-7B-Instruct">Qwen 2.5 (7B)</option>
+                  <option value="meta-llama/Llama-3.2-3B-Instruct">Llama 3.2 (3B)</option>
+                  <option value="google/gemma-3-27b-it">Gemma 3 (27B)</option>
+                  <option value="google/gemma-3-4b-it">Gemma 3 (4B)</option>
                 </select>
               )}
             </div>
@@ -363,7 +367,7 @@ export const StandaloneLogConsole: React.FC = () => {
                 title="Click to toggle Image Generation AI Engine"
               >
                 <ImageIcon size={10} />
-                <span>{imageEngine === 'gemini' ? 'Gemini 3.1' : imageEngine === 'huggingface' ? 'Hugging Face' : 'Pollinations AI'}</span>
+                <span>{imageEngine === 'gemini' ? 'Gemini Image' : imageEngine === 'huggingface' ? 'Hugging Face' : 'Pollinations AI'}</span>
               </button>
 
               {imageEngine === 'huggingface' ? (
@@ -375,13 +379,10 @@ export const StandaloneLogConsole: React.FC = () => {
                 >
                   <option value="black-forest-labs/FLUX.1-schnell">FLUX.1 Schnell</option>
                   <option value="black-forest-labs/FLUX.1-dev">FLUX.1 Dev</option>
-                  <option value="Freepik/F-Lite-Texture">Freepik / F-Lite-Texture (10B)</option>
-                  <option value="ByteDance/SDXL-Lightning">SDXL Lightning</option>
-                  <option value="nerijs/pixel-art-xl">Pixel Art XL</option>
                   <option value="stabilityai/stable-diffusion-3.5-large">SD 3.5 Large</option>
-                  <option value="microsoft/Mage-Flow-Turbo">Mage-Flow-Turbo</option>
-                  <option value="krea/Krea-2-Turbo">Krea-2-Turbo</option>
-                  <option value="prompthero/openjourney-v4">OpenJourney v4</option>
+                  <option value="stabilityai/stable-diffusion-3.5-large-turbo">SD 3.5 Large Turbo</option>
+                  <option value="ByteDance/SDXL-Lightning">SDXL Lightning</option>
+                  <option value="stabilityai/stable-diffusion-xl-base-1.0">SDXL 1.0</option>
                 </select>
               ) : imageEngine === 'gemini' ? (
                 <select
@@ -390,9 +391,10 @@ export const StandaloneLogConsole: React.FC = () => {
                   className="bg-purple-950 text-purple-200 border border-purple-800 rounded-full px-2.5 py-1 text-[10px] font-mono font-bold cursor-pointer hover:bg-purple-900 focus:outline-none transition-all"
                   title="Select Google Gemini Image Model"
                 >
-                  <option value="gemini-3.1-flash-image">Gemini 3.1 Flash Image</option>
-                  <option value="gemini-3.1-flash-lite-image">Nano Banana 2 Lite</option>
-                  <option value="gemini-3-pro-image">Nano Banana Pro</option>
+                  <option value="gemini-3.1-flash-image">Gemini 3.1 Flash Image (Nano Banana 2)</option>
+                  <option value="gemini-nano-banana-2.1">Gemini Nano Banana 2.1</option>
+                  <option value="gemini-3-pro-image">Gemini 3 Pro Image (Nano Banana Pro)</option>
+                  <option value="gemini-3.1-flash-lite-image">Gemini 3.1 Flash Lite Image</option>
                   <option value="gemini-2.5-flash-image">Gemini 2.5 Flash Image</option>
                 </select>
               ) : (
@@ -402,29 +404,9 @@ export const StandaloneLogConsole: React.FC = () => {
                   className="bg-blue-950 text-blue-100 border border-blue-800 rounded-full px-2.5 py-1 text-[10px] font-mono font-bold cursor-pointer hover:bg-blue-900 focus:outline-none transition-all"
                   title="Select Pollinations AI Sub-model"
                 >
-                  <optgroup label="Core & Open-Source">
-                    <option value="flux">Flux / Flux Schnell</option>
-                    <option value="flux-realism">Flux Realism</option>
-                    <option value="flux-anime">Flux Anime</option>
-                    <option value="flux-3d">Flux 3D</option>
-                    <option value="turbo">Turbo (Instant)</option>
-                    <option value="stable-diffusion">Stable Diffusion</option>
-                  </optgroup>
-                  <optgroup label="Specialized & Custom">
-                    <option value="z-image">Z-Image (Artistic)</option>
-                    <option value="nano-banana">Nano Banana</option>
-                    <option value="nano-banana-pro">Nano Banana Pro</option>
-                    <option value="seedream">Seedream</option>
-                    <option value="seedream-4.5">Seedream 4.5</option>
-                    <option value="grok-imagine">Grok Imagine</option>
-                    <option value="nova-canvas">Nova Canvas</option>
-                  </optgroup>
-                  <optgroup label="Premium Tier">
-                    <option value="gpt-image">GPT Image</option>
-                    <option value="gpt-image-1.5">GPT Image 1.5</option>
-                    <option value="kontext">Kontext</option>
-                    <option value="klein">Klein</option>
-                  </optgroup>
+                  <option value="flux">Pollinations FLUX</option>
+                  <option value="sana">Pollinations Sana</option>
+                  <option value="turbo">Pollinations Turbo</option>
                 </select>
               )}
 

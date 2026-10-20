@@ -162,64 +162,114 @@ export type ImageEngine = 'gemini' | 'pollinations' | 'huggingface';
 export type HuggingFaceSubModel = 
   | 'black-forest-labs/FLUX.1-schnell' 
   | 'black-forest-labs/FLUX.1-dev' 
-  | 'ByteDance/SDXL-Lightning' 
-  | 'nerijs/pixel-art-xl' 
   | 'stabilityai/stable-diffusion-3.5-large'
-  | 'microsoft/Mage-Flow-Turbo'
-  | 'krea/Krea-2-Turbo'
-  | 'Freepik/F-Lite-Texture'
-  | 'prompthero/openjourney-v4';
+  | 'stabilityai/stable-diffusion-3.5-large-turbo'
+  | 'ByteDance/SDXL-Lightning'
+  | 'stabilityai/stable-diffusion-xl-base-1.0';
 
 export type GeminiImageSubModel = 
   | 'gemini-3.1-flash-image'
-  | 'gemini-3.1-flash-lite-image'
+  | 'gemini-nano-banana-2.1'
   | 'gemini-3-pro-image'
+  | 'gemini-3.1-flash-lite-image'
   | 'gemini-2.5-flash-image';
 
 export type PollinationsSubModel = 
-  // Core & Open-Source Tier
   | 'flux'
-  | 'flux-realism'
-  | 'flux-anime'
-  | 'flux-3d'
-  | 'turbo'
-  | 'stable-diffusion'
-  // Specialized & Custom Aesthetic Tier
-  | 'z-image'
-  | 'nano-banana'
-  | 'nano-banana-pro'
-  | 'seedream'
-  | 'seedream-4.5'
-  | 'grok-imagine'
-  | 'nova-canvas'
-  // Premium Tier
-  | 'gpt-image'
-  | 'gpt-image-1.5'
-  | 'kontext'
-  | 'klein';
+  | 'sana'
+  | 'turbo';
 
 export type StoryEngine = 'gemini' | 'huggingface';
 
 export type GeminiStorySubModel = 
+  | 'gemini-3.8-flash'
+  | 'gemini-3.7-flash'
   | 'gemini-3.6-flash'
   | 'gemini-3.5-flash'
-  | 'gemini-3.1-flash-lite'
-  | 'gemini-1.5-flash';
+  | 'gemini-3.1-pro-preview';
 
 export type HfStorySubModel = 
-  | 'google/gemma-3-4b-it'
+  | 'Qwen/Qwen2.5-72B-Instruct'
+  | 'meta-llama/Llama-3.3-70B-Instruct'
+  | 'Qwen/Qwen2.5-7B-Instruct'
   | 'meta-llama/Llama-3.2-3B-Instruct'
-  | 'Qwen/Qwen2.5-7B-Instruct';
+  | 'google/gemma-3-27b-it'
+  | 'google/gemma-3-4b-it';
+
+const VALID_HF_IMAGE_MODELS: HuggingFaceSubModel[] = [
+  'black-forest-labs/FLUX.1-schnell',
+  'black-forest-labs/FLUX.1-dev',
+  'stabilityai/stable-diffusion-3.5-large',
+  'stabilityai/stable-diffusion-3.5-large-turbo',
+  'ByteDance/SDXL-Lightning',
+  'stabilityai/stable-diffusion-xl-base-1.0',
+];
+
+const VALID_GEMINI_IMAGE_MODELS: GeminiImageSubModel[] = [
+  'gemini-3.1-flash-image',
+  'gemini-nano-banana-2.1',
+  'gemini-3-pro-image',
+  'gemini-3.1-flash-lite-image',
+  'gemini-2.5-flash-image',
+];
+
+const VALID_POLLINATIONS_MODELS: PollinationsSubModel[] = ['flux', 'sana', 'turbo'];
+
+const VALID_GEMINI_STORY_MODELS: GeminiStorySubModel[] = [
+  'gemini-3.8-flash',
+  'gemini-3.7-flash',
+  'gemini-3.6-flash',
+  'gemini-3.5-flash',
+  'gemini-3.1-pro-preview',
+];
+
+const VALID_HF_STORY_MODELS: HfStorySubModel[] = [
+  'Qwen/Qwen2.5-72B-Instruct',
+  'meta-llama/Llama-3.3-70B-Instruct',
+  'Qwen/Qwen2.5-7B-Instruct',
+  'meta-llama/Llama-3.2-3B-Instruct',
+  'google/gemma-3-27b-it',
+  'google/gemma-3-4b-it',
+];
 
 let activeImageEngine: ImageEngine = (typeof localStorage !== 'undefined' && (localStorage.getItem('comicskido_image_engine') as ImageEngine)) || 'gemini';
-let activeHfSubModel: HuggingFaceSubModel = (typeof localStorage !== 'undefined' && (localStorage.getItem('comicskido_hf_sub_model') as HuggingFaceSubModel)) || 'black-forest-labs/FLUX.1-schnell';
-let activeGeminiSubModel: GeminiImageSubModel = (typeof localStorage !== 'undefined' && (localStorage.getItem('comicskido_gemini_sub_model') as GeminiImageSubModel)) || 'gemini-3.1-flash-image';
-let activePollinationsSubModel: PollinationsSubModel = (typeof localStorage !== 'undefined' && (localStorage.getItem('comicskido_pollinations_sub_model') as PollinationsSubModel)) || 'flux';
+
+const rawSavedHfModel = typeof localStorage !== 'undefined' ? localStorage.getItem('comicskido_hf_sub_model') : null;
+let activeHfSubModel: HuggingFaceSubModel = (
+  rawSavedHfModel && VALID_HF_IMAGE_MODELS.includes(rawSavedHfModel as HuggingFaceSubModel)
+    ? (rawSavedHfModel as HuggingFaceSubModel)
+    : 'black-forest-labs/FLUX.1-schnell'
+);
+
+const rawSavedGeminiImgModel = typeof localStorage !== 'undefined' ? localStorage.getItem('comicskido_gemini_sub_model') : null;
+let activeGeminiSubModel: GeminiImageSubModel = (
+  rawSavedGeminiImgModel && VALID_GEMINI_IMAGE_MODELS.includes(rawSavedGeminiImgModel as GeminiImageSubModel)
+    ? (rawSavedGeminiImgModel as GeminiImageSubModel)
+    : 'gemini-3.1-flash-image'
+);
+
+const rawSavedPollinationsModel = typeof localStorage !== 'undefined' ? localStorage.getItem('comicskido_pollinations_sub_model') : null;
+let activePollinationsSubModel: PollinationsSubModel = (
+  rawSavedPollinationsModel && VALID_POLLINATIONS_MODELS.includes(rawSavedPollinationsModel as PollinationsSubModel)
+    ? (rawSavedPollinationsModel as PollinationsSubModel)
+    : 'flux'
+);
+
 let autoFallbackEnabled: boolean = typeof localStorage !== 'undefined' ? localStorage.getItem('comicskido_auto_fallback') === 'true' : false;
 
 let activeStoryEngine: StoryEngine = (typeof localStorage !== 'undefined' && (localStorage.getItem('comicskido_story_engine') as StoryEngine)) || 'gemini';
-let activeGeminiStorySubModel: GeminiStorySubModel = (typeof localStorage !== 'undefined' && (localStorage.getItem('comicskido_gemini_story_sub_model') as GeminiStorySubModel)) || 'gemini-3.6-flash';
-let activeHfStorySubModel: HfStorySubModel = (typeof localStorage !== 'undefined' && (localStorage.getItem('comicskido_hf_story_sub_model') as HfStorySubModel)) || 'google/gemma-3-4b-it';
+const rawSavedStoryModel = typeof localStorage !== 'undefined' ? localStorage.getItem('comicskido_gemini_story_sub_model') : null;
+let activeGeminiStorySubModel: GeminiStorySubModel = (
+  rawSavedStoryModel && VALID_GEMINI_STORY_MODELS.includes(rawSavedStoryModel as GeminiStorySubModel)
+    ? (rawSavedStoryModel as GeminiStorySubModel)
+    : 'gemini-3.6-flash'
+);
+const rawSavedHfStoryModel = typeof localStorage !== 'undefined' ? localStorage.getItem('comicskido_hf_story_sub_model') : null;
+let activeHfStorySubModel: HfStorySubModel = (
+  rawSavedHfStoryModel && VALID_HF_STORY_MODELS.includes(rawSavedHfStoryModel as HfStorySubModel)
+    ? (rawSavedHfStoryModel as HfStorySubModel)
+    : 'Qwen/Qwen2.5-72B-Instruct'
+);
 
 export type EngineSettingsSnapshot = {
   imageEngine: ImageEngine;

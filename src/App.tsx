@@ -60,8 +60,8 @@ import {
 
 type Step = 'landing' | 'story' | 'casting' | 'layout' | 'generating' | 'reader';
 
-const VERSION_NUMBER = 'v1.1.0';
-const BUILD_NUMBER = '2026.07.27.01';
+const VERSION_NUMBER = 'v1.2.0';
+const BUILD_NUMBER = '2026.10.20.01';
 const SESSION_STORAGE_KEY = 'comicskido_last_story';
 
 type SavedSession = {
@@ -920,68 +920,8 @@ export default function App() {
     }
   }, [isAutoplay, step]);
 
-  const FALLBACK_IMAGES: Record<ArtStyle, string[]> = {
-    vibrant: [
-      'https://images.unsplash.com/photo-1544376798-89aa6b82c6cd?w=800&q=80',
-      'https://images.unsplash.com/photo-1505628346881-b72b27e84530?w=800&q=80',
-      'https://images.unsplash.com/photo-1590412200988-a436bb7050a8?w=800&q=80'
-    ],
-    sketched: [
-      'https://images.unsplash.com/photo-1509248961158-e54f6934749c?w=800&q=80',
-      'https://images.unsplash.com/photo-1513364776144-60967b0f800f?w=800&q=80',
-      'https://images.unsplash.com/photo-1605721911519-3dfeb3be25e7?w=800&q=80'
-    ],
-    watercolor: [
-      'https://images.unsplash.com/photo-1579783902614-a3fb3927b6a5?w=800&q=80',
-      'https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?w=800&q=80',
-      'https://images.unsplash.com/photo-1582555172866-f73bb12a2ab3?w=800&q=80'
-    ],
-    noir: [
-      'https://images.unsplash.com/photo-1478720568477-152d9b164e26?w=800&q=80',
-      'https://images.unsplash.com/photo-1509248961158-e54f6934749c?w=800&q=80',
-      'https://images.unsplash.com/photo-1505322101000-19457cff32ba?w=800&q=80'
-    ],
-    'classic-golden-age': [
-      'https://images.unsplash.com/photo-1501432377862-3d0432b87a14?w=800&q=80',
-      'https://images.unsplash.com/photo-1534073828943-f801091bb18c?w=800&q=80',
-      'https://images.unsplash.com/photo-1518156677180-95a2893f3e9f?w=800&q=80'
-    ],
-    manga: [
-      'https://images.unsplash.com/photo-1601850494422-3cf14624b0b3?w=800&q=80',
-      'https://images.unsplash.com/photo-1578632738981-4cd905be860a?w=800&q=80',
-      'https://images.unsplash.com/photo-1528496191709-bb99480a45af?w=800&q=80'
-    ],
-    tintin: [
-      'https://images.unsplash.com/photo-1507608869274-d3177c8bb4c7?w=800&q=80',
-      'https://images.unsplash.com/photo-1594911772125-07fc7a2d8d9f?w=800&q=80',
-      'https://images.unsplash.com/photo-1578301978693-85fa9c0320b9?w=800&q=80'
-    ],
-    asterix: [
-      'https://images.unsplash.com/photo-1516624683217-bf02fc6b6b7c?w=800&q=80',
-      'https://images.unsplash.com/photo-1618641986557-1ecd230959aa?w=800&q=80',
-      'https://images.unsplash.com/photo-1502082553048-f009c37129b9?w=800&q=80'
-    ],
-    marvel: [
-      'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=800&q=80',
-      'https://images.unsplash.com/photo-1534809027769-b00d750a6bac?w=800&q=80',
-      'https://images.unsplash.com/photo-1500964757637-c85e8a162699?w=800&q=80'
-    ],
-    dc: [
-      'https://images.unsplash.com/photo-1518156677180-95a2893f3e9f?w=800&q=80',
-      'https://images.unsplash.com/photo-1531259683007-016a7b628fc3?w=800&q=80',
-      'https://images.unsplash.com/photo-1508739773434-c26b3d09e071?w=800&q=80'
-    ],
-    colorful: [
-      'https://images.unsplash.com/photo-1502082553048-f009c37129b9?w=800&q=80',
-      'https://images.unsplash.com/photo-1563089145-599997674d42?w=800&q=80',
-      'https://images.unsplash.com/photo-1550684848-fac1c5b4e853?w=800&q=80'
-    ]
-  };
-
-  const getFallbackImage = (style: ArtStyle, index: number) => {
-    const images = FALLBACK_IMAGES[style] || FALLBACK_IMAGES.vibrant;
-    return images[index % images.length];
-  };
+  const [panelError, setPanelError] = useState<string | null>(null);
+  const [retryingPanelIndex, setRetryingPanelIndex] = useState<number | null>(null);
 
   const startGeneration = async () => {
     const resolvedStory =
@@ -1084,36 +1024,43 @@ export default function App() {
       // Run character portraits and panel image generation in the background sequentially to avoid quota-drowning concurrency spikes!
       const generateAllImagesInBackground = async () => {
         try {
+          setPanelError(null);
           const updatedCharacters = [...characters];
 
-          // 1. Generate character portraits sequentially in the background if they don't have them
+          // 1. Extract photo likeness blueprints (fast vision call) and optional portrait avatars
           for (let cIdx = 0; cIdx < updatedCharacters.length; cIdx++) {
             const char = updatedCharacters[cIdx];
-            if (!char.drawnPortraitUrl) {
-              try {
-                // Find matching photo-derived visual blueprint if available
-                let referencePrompt = char.description;
-                if (char.photoUrls && char.photoUrls.length > 0) {
-                  try {
-                    const likenessDesc = await describePhotoLikeness(char.photoUrls[0], char.name);
-                    if (likenessDesc && likenessDesc.trim()) {
-                      referencePrompt = [
-                        likenessDesc.trim(),
-                        char.description?.trim()
-                          ? `Personality/story traits only (do NOT change hair color, age, or face from the photo): ${char.description.trim()}`
-                          : "",
-                      ].filter(Boolean).join(" ");
-                    }
-                  } catch (err) {
-                    console.error("Failed to analyze photo likeness for background avatar", err);
-                  }
-                } else {
-                  const matchingBlueprint = (result.characterVisuals || []).find((cv: any) => cv.name.toLowerCase() === char.name.toLowerCase());
-                  if (matchingBlueprint) {
-                    referencePrompt = `${matchingBlueprint.visualPrompt}. ${char.description}`;
-                  }
-                }
+            let referencePrompt = char.visualPrompt || char.description;
 
+            if (!char.visualPrompt && char.photoUrls && char.photoUrls.length > 0) {
+              try {
+                const likenessDesc = await describePhotoLikeness(char.photoUrls[0], char.name);
+                if (likenessDesc && likenessDesc.trim()) {
+                  referencePrompt = [
+                    likenessDesc.trim(),
+                    char.description?.trim()
+                      ? `Personality/story traits only (do NOT change hair color, age, or face from the photo): ${char.description.trim()}`
+                      : "",
+                  ].filter(Boolean).join(" ");
+                }
+              } catch (err) {
+                console.error("Failed to analyze photo likeness for background avatar", err);
+              }
+            } else if (!char.visualPrompt) {
+              const matchingBlueprint = (result.characterVisuals || []).find((cv: any) => cv.name.toLowerCase() === char.name.toLowerCase());
+              if (matchingBlueprint) {
+                referencePrompt = `${matchingBlueprint.visualPrompt}. ${char.description}`;
+              }
+            }
+
+            updatedCharacters[cIdx] = {
+              ...char,
+              visualPrompt: referencePrompt
+            };
+
+            // Only auto-generate a separate character card image before panels when not on rate-throttled Pollinations
+            if (!char.drawnPortraitUrl && imageEngine !== 'pollinations') {
+              try {
                 const imgStartTime = Date.now();
                 const genUrl = await generateCharacterImage(char.name, referencePrompt, artStyle);
                 if (genUrl) {
@@ -1126,14 +1073,12 @@ export default function App() {
                     console.error("Failed to compress generated character portrait", shrinkErr);
                   }
                   
-                  // Update our local tracking array immediately
                   updatedCharacters[cIdx] = {
-                    ...char,
+                    ...updatedCharacters[cIdx],
                     drawnPortraitUrl: shrunkenCharUrl,
                     visualPrompt: referencePrompt
                   };
 
-                  // Update BOTH the global character pool AND the active comic representation!
                   setCharacters(prev => {
                     const updated = prev.map(c => c.name === char.name ? { ...c, drawnPortraitUrl: shrunkenCharUrl, visualPrompt: referencePrompt } : c);
                     setComic(prevComic => {
@@ -1154,13 +1099,12 @@ export default function App() {
                   }));
                 }
 
-                // Small relaxation delay to prevent 429 rate issues
-                await new Promise(r => setTimeout(r, 2200));
+                await new Promise(r => setTimeout(r, 1500));
               } catch (e) {
                 console.error("Character generation failed", e);
                 setAiStats(prev => ({
                   ...prev,
-                  lastApiStatus: 'Warning - Character Portrait Failed (Quota)'
+                  lastApiStatus: `Character Portrait Error (${imageEngine})`
                 }));
               }
             }
@@ -1214,20 +1158,23 @@ export default function App() {
                 return { ...prev, panels: updatedPanels };
               });
 
-              // Add a cooldown limit to spacing commands to entirely preserve users' free trial quota key limits
-              await new Promise(r => setTimeout(r, 3000));
+              if (i < panelsCount - 1) {
+                await new Promise(r => setTimeout(r, 1500));
+              }
             } catch (e) {
               console.error(`Panel ${i} generation failed`, e);
-              const fallbackUrl = getFallbackImage(artStyle, i);
+              const errMsg = e instanceof Error ? e.message : String(e);
+              setPanelError(errMsg);
               setAiStats(prev => ({
                 ...prev,
-                lastApiStatus: `Warning - Panel #${i + 1} Sourced from Stock (429/Credits)`
+                lastApiStatus: `Error - Panel #${i + 1} Failed (${imageEngine})`
               }));
               
+              // Per RULES.md §3: Never substitute stock photos on failure — leave imageUrl empty so user can retry or switch engine
               setComic(prev => {
                 if (!prev) return null;
                 const updatedPanels = [...prev.panels];
-                updatedPanels[i] = { ...panel, imageUrl: fallbackUrl };
+                updatedPanels[i] = { ...panel, imageUrl: '' };
                 return { ...prev, panels: updatedPanels };
               });
             } finally {
@@ -1270,6 +1217,8 @@ export default function App() {
     if (!comic) return;
     
     const currentPanel = comic.panels[index];
+    setRetryingPanelIndex(index);
+    setPanelError(null);
 
     try {
       const blueprintsList = characters.map(c => {
@@ -1302,13 +1251,16 @@ export default function App() {
       });
     } catch (e) {
       console.error(`Retry Panel ${index} failed`, e);
-      const fallbackUrl = getFallbackImage(artStyle, index);
+      const errMsg = e instanceof Error ? e.message : String(e);
+      setPanelError(errMsg);
       setComic(prev => {
         if (!prev) return null;
         const updatedPanels = [...prev.panels];
-        updatedPanels[index] = { ...currentPanel, imageUrl: fallbackUrl };
+        updatedPanels[index] = { ...currentPanel, imageUrl: '' };
         return { ...prev, panels: updatedPanels };
       });
+    } finally {
+      setRetryingPanelIndex(null);
     }
   };
 
@@ -1365,328 +1317,125 @@ export default function App() {
         <div className="absolute bottom-10 right-10 -rotate-12"><Sparkles size={120} /></div>
       </div>
 
-      <header className="relative z-20 p-2 sm:p-4 md:p-6 flex justify-between items-center bg-white/40 backdrop-blur-md border-b border-black/10 no-print sticky top-0">
-        {/* Left Branding & WinAdmin Logs Switch */}
-        <div className="flex items-start gap-1.5 md:gap-3 shrink-0">
+      <header className="relative z-20 px-3 py-2.5 sm:px-6 sm:py-3.5 flex flex-wrap justify-between items-center gap-3 bg-white/60 backdrop-blur-md border-b-2 border-black/10 no-print sticky top-0">
+        {/* Left: Brand Logo & Title */}
+        <div className="flex items-center gap-2.5 shrink-0">
           <div 
-            className="bg-black text-accent p-1.5 md:p-2 rounded-xl shadow-lg cursor-pointer mt-0.5" 
+            className="bg-black text-accent p-2 rounded-xl shadow-md cursor-pointer hover:scale-105 transition-transform" 
             onClick={() => setStep('landing')}
           >
-            <Sparkles size={18} className="md:w-6 md:h-6" />
+            <Sparkles size={20} />
           </div>
           <div className="flex flex-col">
             <h1 
               className={cn(
-                "text-lg md:text-2xl font-black tracking-tighter uppercase italic drop-shadow-sm leading-none cursor-pointer",
+                "text-xl sm:text-2xl font-black tracking-tighter uppercase italic leading-none cursor-pointer",
                 accentColor === 'rainbow' && "rainbow-text"
               )}
               onClick={() => setStep('landing')}
             >
               Comicskido
             </h1>
-            <div className="flex items-center gap-1 text-[9px] md:text-[10px] font-black uppercase text-amber-600 tracking-wide mt-0.5">
-              <span>{VERSION_NUMBER}</span>
-              <span>•</span>
-              <span>Build: {BUILD_NUMBER}</span>
-            </div>
-            {/* Small >WinAdmin button directly below Comicskido title */}
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                window.open(
-                  window.location.origin + window.location.pathname + '?view=logs',
-                  'ComicskidoLogConsole',
-                  'width=1200,height=800,scrollbars=yes,resizable=yes'
-                );
-              }}
-              className="mt-1 inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-black text-emerald-400 hover:bg-neutral-800 rounded border border-emerald-500/50 font-mono font-bold text-[9px] tracking-tight w-max transition-all shadow-[1px_1px_0px_0px_rgba(0,0,0,0.2)] active:translate-x-0.5 active:translate-y-0.5 cursor-pointer"
-              title={language === 'he' ? "פתח חלון יומנים ושרת נפרד >WinAdmin" : "Open Live System Terminal & Server Monitor in a separate window (>WinAdmin)"}
-            >
-              <span>&gt;WinAdmin</span>
-            </button>
+            <span className="text-[9px] font-bold uppercase text-black/50 tracking-wider mt-0.5">
+              {VERSION_NUMBER}
+            </span>
           </div>
         </div>
 
-        {/* Right Header Navigation & Settings Controls */}
-        <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3.5 ml-auto">
-          {/* Theme Colors & Language Selector Stack */}
-          <div className="flex flex-col items-center sm:items-end gap-1 shrink-0">
-            {/* Theme Colors */}
-            <div className="flex items-center gap-1 bg-black/5 p-1 rounded-full border border-black/5 shrink-0">
-              {THEME_COLORS.map(color => (
-                <button 
-                  key={color.value}
-                  onClick={() => setAccentColor(color.value)}
-                  className={cn(
-                    "w-3.5 h-3.5 sm:w-5 sm:h-5 rounded-full border border-black/10 transition-all hover:scale-125 hover:rotate-12 flex-shrink-0",
-                    color.value === 'rainbow' && "animate-rainbow border-white/50",
-                    accentColor === color.value ? "ring-2 ring-white scale-110 shadow-lg" : "opacity-40"
-                  )}
-                  style={color.value !== 'rainbow' ? { backgroundColor: color.value } : {}}
-                  title={color.name}
-                />
-              ))}
-            </div>
-
-            {/* Language Selector (below colors) */}
-            <div className="flex items-center gap-0.5 bg-white/50 rounded-2xl p-0.5 sm:p-1 border border-black/10 shadow-sm shrink-0">
-              {[
-                { code: 'en', label: 'EN' },
-                { code: 'he', label: 'עב' },
-                { code: 'fr', label: 'FR' },
-                { code: 'es', label: 'ES' },
-                { code: 'de', label: 'DE' }
-              ].map(lang => (
+        {/* Center: Clean 4-Step Wizard Navigation (visible when inside studio flow) */}
+        {step !== 'landing' && (
+          <nav className="hidden md:flex items-center gap-1.5 bg-white/80 px-2.5 py-1.5 rounded-full border-2 border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
+            {([
+              { id: 'story', num: '1', label: language === 'he' ? 'סיפור' : language === 'fr' ? 'Histoire' : 'Story' },
+              { id: 'casting', num: '2', label: language === 'he' ? 'דמויות' : language === 'fr' ? 'Personnages' : 'Cast' },
+              { id: 'layout', num: '3', label: language === 'he' ? 'עיצוב' : language === 'fr' ? 'Style' : 'Style' },
+              { id: 'reader', num: '4', label: language === 'he' ? 'קריאה' : language === 'fr' ? 'Lecture' : 'Read', disabled: !comic }
+            ] as const).map((item) => {
+              const isActive = step === item.id || (step === 'generating' && item.id === 'layout');
+              const isDisabled = 'disabled' in item && item.disabled;
+              return (
                 <button
-                  key={lang.code}
-                  onClick={() => setLanguage(lang.code as Language)}
-                  className={cn(
-                    "px-1.5 py-0.5 sm:px-2 sm:py-1 rounded-xl text-[8px] sm:text-[10px] font-black transition-all",
-                    language === lang.code 
-                      ? "bg-black text-white scale-105 shadow-md" 
-                      : "text-black/40 hover:text-black/70 hover:bg-black/5"
-                  )}
-                >
-                  {lang.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* AI Token Budget Gauge & Model Usage Report Stack */}
-          <div className="flex flex-col items-center sm:items-end gap-1 shrink-0">
-            {/* Real-time Session AI Token & Budget Gauge */}
-            <div 
-              onClick={() => setShowDiagnostics(true)}
-              className="flex items-center gap-1.5 bg-black text-white px-2.5 py-1 sm:px-3 rounded-full border-2 border-black text-[9px] sm:text-[10px] font-black uppercase cursor-pointer hover:bg-neutral-800 transition-colors shrink-0 shadow-[2px_2px_0px_0px_rgba(0,0,0,0.15)] active:translate-x-0.5 active:translate-y-0.5"
-              title={language === 'he' ? "קליק לפירוט אבחון מלא" : "Click for detailed AI diagnostics"}
-            >
-              <span className="relative flex h-2 w-2 shrink-0">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-              </span>
-              <span className="tracking-tight">
-                <span className="hidden xs:inline">
-                  {language === 'he' ? "תקציב:" : language === 'fr' ? "Budget :" : "Budget:"}{' '}
-                </span>
-                <span className="font-mono text-accent">{Math.max(0, SESSION_CREDIT - totalTokens).toLocaleString()}</span>
-              </span>
-              <span className="opacity-40 border-l border-white/20 pl-1.5 sm:pl-2 font-mono text-[8px] sm:text-[9px]">
-                {totalTokens.toLocaleString()}
-              </span>
-            </div>
-
-            {/* Model Usage Summary Report Header Button (below token gauge) */}
-            <button 
-              onClick={() => setShowModelReportModal(true)}
-              className="flex items-center gap-1 px-2 py-0.5 sm:px-2.5 sm:py-1 bg-black text-amber-400 hover:bg-neutral-800 rounded-full border-2 border-black text-[9px] sm:text-[10px] font-black uppercase transition-all shrink-0 shadow-[2px_2px_0px_0px_rgba(0,0,0,0.15)] active:translate-x-0.5 active:translate-y-0.5 cursor-pointer"
-              title={language === 'he' ? "לחץ לצפייה בדוח מודלים מעודכן (אווטארים ועמודים)" : "Click to view Live Model Usage Report (Avatars & Pages)"}
-            >
-              <BarChart2 size={12} className="text-amber-400 shrink-0" />
-              <span>{language === 'he' ? "דוח מודלים" : "Model Report"}</span>
-            </button>
-          </div>
-
-          {/* Top Model Selectors: Story Decomposition AI & Image Creation AI */}
-          <div className="flex flex-wrap items-center gap-2 bg-black/5 p-1.5 rounded-2xl border border-black/10 shrink-0">
-            {/* PATH 1: 📖 Story Decomposition Models Selector */}
-            <div className="flex flex-col items-start gap-1 p-1 bg-white/80 rounded-xl border border-black/10 shadow-sm">
-              <div className="flex items-center gap-1 text-[8px] sm:text-[9px] font-black uppercase text-amber-800 tracking-wider px-0.5">
-                <BookOpen size={10} className="shrink-0 text-amber-600" />
-                <span>{language === 'he' ? "פירוק עלילה (Story AI)" : "Story Decomposition"}</span>
-              </div>
-              <div className="flex items-center gap-1">
-                {/* Engine Selector Button */}
-                <button
+                  key={item.id}
                   type="button"
-                  onClick={() => {
-                    const nextEngine: StoryEngine = storyEngine === 'gemini' ? 'huggingface' : 'gemini';
-                    handleSetStoryEngine(nextEngine);
-                  }}
+                  disabled={isDisabled || isGenerating}
+                  onClick={() => setStep(item.id as Step)}
                   className={cn(
-                    "flex items-center gap-1 px-2 py-0.5 rounded-full border border-black/20 text-[9px] font-black uppercase transition-all shrink-0 cursor-pointer shadow-sm",
-                    storyEngine === 'gemini' 
-                      ? "bg-purple-900 text-purple-200 border-purple-800 hover:bg-purple-800" 
-                      : "bg-amber-400 text-black border-black hover:bg-amber-300"
+                    "px-3 py-1 rounded-full text-xs font-black uppercase transition-all flex items-center gap-1.5",
+                    isActive
+                      ? "bg-black text-accent shadow-sm scale-105"
+                      : isDisabled
+                      ? "opacity-30 cursor-not-allowed"
+                      : "text-black/70 hover:text-black hover:bg-black/5 cursor-pointer"
                   )}
-                  title={language === 'he' ? "לחץ להחלפת מנוע פירוק סיפור (Gemini / Hugging Face Open LLM)" : "Click to toggle Story AI engine (Gemini AI vs Hugging Face Open LLM)"}
                 >
-                  <Sparkles size={9} className="shrink-0" />
-                  <span>{storyEngine === 'gemini' ? 'Gemini AI' : 'Hugging Face'}</span>
-                </button>
-
-                {/* Story Sub-model Selector Dropdown */}
-                {storyEngine === 'gemini' ? (
-                  <select
-                    value={geminiStorySubModel}
-                    onChange={(e) => handleSetGeminiStorySubModel(e.target.value as GeminiStorySubModel)}
-                    className="bg-purple-950 text-purple-100 border border-purple-800 rounded-full px-2 py-0.5 text-[9px] font-mono font-bold cursor-pointer hover:bg-purple-900 focus:outline-none transition-all shadow-sm"
-                    title={language === 'he' ? "בחר מודל Gemini לפירוק עלילה" : "Select Gemini model for story decomposition"}
-                  >
-                    <option value="gemini-3.6-flash">Gemini 3.6 Flash</option>
-                    <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
-                    <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash Lite</option>
-                    <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
-                  </select>
-                ) : (
-                  <select
-                    value={hfStorySubModel}
-                    onChange={(e) => handleSetHfStorySubModel(e.target.value as HfStorySubModel)}
-                    className="bg-black text-amber-300 border border-black rounded-full px-2 py-0.5 text-[9px] font-mono font-bold cursor-pointer hover:bg-zinc-800 focus:outline-none transition-all shadow-sm"
-                    title={language === 'he' ? "בחר מודל שפה חופשי של Hugging Face" : "Select Hugging Face Open LLM"}
-                  >
-                    <option value="google/gemma-3-4b-it">Google Gemma 3 (4B)</option>
-                    <option value="meta-llama/Llama-3.2-3B-Instruct">Meta Llama 3.2 (3B)</option>
-                    <option value="Qwen/Qwen2.5-7B-Instruct">Qwen 2.5 (7B)</option>
-                  </select>
-                )}
-              </div>
-            </div>
-
-            {/* PATH 2: 🎨 Image Creation Models Selector */}
-            <div className="flex flex-col items-start gap-1 p-1 bg-white/80 rounded-xl border border-black/10 shadow-sm">
-              <div className="flex items-center gap-1 text-[8px] sm:text-[9px] font-black uppercase text-purple-800 tracking-wider px-0.5">
-                <ImageIcon size={10} className="shrink-0 text-purple-600" />
-                <span>{language === 'he' ? "יצירת תמונות (Image AI)" : "Image Creation"}</span>
-              </div>
-              <div className="flex items-center gap-1">
-                {/* Engine Selector Button */}
-                <button 
-                  type="button"
-                  onClick={() => {
-                    const nextEngine: ImageEngine = 
-                      imageEngine === 'gemini' ? 'huggingface' :
-                      imageEngine === 'huggingface' ? 'pollinations' : 'gemini';
-                    handleSetImageEngine(nextEngine);
-                  }}
-                  className={cn(
-                    "flex items-center gap-1 px-2 py-0.5 rounded-full border border-black/20 text-[9px] font-black uppercase transition-all shrink-0 cursor-pointer shadow-sm",
-                    imageEngine === 'gemini' 
-                      ? "bg-purple-900 text-purple-200 border-purple-800 hover:bg-purple-800" 
-                      : imageEngine === 'huggingface'
-                      ? "bg-amber-400 text-black border-black hover:bg-amber-300"
-                      : "bg-blue-600 text-white border-black hover:bg-blue-500"
-                  )}
-                  title={language === 'he' ? "לחץ להחלפת מנוע מחולל התמונות" : "Click to toggle Image Generation AI Engine"}
-                >
-                  <ImageIcon size={9} className="shrink-0" />
-                  <span>
-                    {imageEngine === 'gemini' ? 'Gemini 3.1' : imageEngine === 'huggingface' ? 'Hugging Face' : 'Pollinations AI'}
+                  <span className="w-4 h-4 rounded-full bg-current/15 flex items-center justify-center text-[10px]">
+                    {item.num}
                   </span>
+                  <span>{item.label}</span>
                 </button>
+              );
+            })}
+          </nav>
+        )}
 
-                {/* Image Sub-model Selector Dropdown */}
-                {imageEngine === 'huggingface' ? (
-                  <select
-                    value={hfSubModel}
-                    onChange={(e) => handleSetHfSubModel(e.target.value as HuggingFaceSubModel)}
-                    className="bg-black text-amber-300 border border-black rounded-full px-2 py-0.5 text-[9px] font-mono font-bold cursor-pointer hover:bg-zinc-800 focus:outline-none transition-all shadow-sm"
-                    title={language === 'he' ? "בחר מודל תמונות ספציפי של Hugging Face" : "Select specific Hugging Face sub-model"}
-                  >
-                    <option value="black-forest-labs/FLUX.1-schnell">FLUX.1 Schnell</option>
-                    <option value="black-forest-labs/FLUX.1-dev">FLUX.1 Dev</option>
-                    <option value="Freepik/F-Lite-Texture">Freepik / F-Lite-Texture (10B)</option>
-                    <option value="ByteDance/SDXL-Lightning">SDXL Lightning</option>
-                    <option value="nerijs/pixel-art-xl">Pixel Art XL</option>
-                    <option value="stabilityai/stable-diffusion-3.5-large">SD 3.5 Large</option>
-                    <option value="microsoft/Mage-Flow-Turbo">Mage-Flow-Turbo</option>
-                    <option value="krea/Krea-2-Turbo">Krea-2-Turbo</option>
-                    <option value="prompthero/openjourney-v4">OpenJourney v4</option>
-                  </select>
-                ) : imageEngine === 'gemini' ? (
-                  <select
-                    value={geminiSubModel}
-                    onChange={(e) => handleSetGeminiSubModel(e.target.value as GeminiImageSubModel)}
-                    className="bg-purple-950 text-purple-200 border border-purple-800 rounded-full px-2 py-0.5 text-[9px] font-mono font-bold cursor-pointer hover:bg-purple-900 focus:outline-none transition-all shadow-sm"
-                    title={language === 'he' ? "בחר מודל תמונות גוגל ג'מיני" : "Select Google Gemini Image Model"}
-                  >
-                    <option value="gemini-3.1-flash-image">Gemini 3.1 Flash Image</option>
-                    <option value="gemini-3.1-flash-lite-image">Nano Banana 2 Lite</option>
-                    <option value="gemini-3-pro-image">Nano Banana Pro</option>
-                    <option value="gemini-2.5-flash-image">Gemini 2.5 Flash Image</option>
-                  </select>
-                ) : (
-                  <select
-                    value={pollinationsSubModel}
-                    onChange={(e) => handleSetPollinationsSubModel(e.target.value as PollinationsSubModel)}
-                    className="bg-blue-950 text-blue-100 border border-blue-800 rounded-full px-2 py-0.5 text-[9px] font-mono font-bold cursor-pointer hover:bg-blue-900 focus:outline-none transition-all shadow-sm"
-                    title={language === 'he' ? "בחר תת-מודל של Pollinations AI" : "Select Pollinations AI Sub-model"}
-                  >
-                    <optgroup label="Core & Open-Source">
-                      <option value="flux">Flux / Flux Schnell</option>
-                      <option value="flux-realism">Flux Realism</option>
-                      <option value="flux-anime">Flux Anime</option>
-                      <option value="flux-3d">Flux 3D</option>
-                      <option value="turbo">Turbo (Instant)</option>
-                      <option value="stable-diffusion">Stable Diffusion</option>
-                    </optgroup>
-                    <optgroup label="Specialized & Custom">
-                      <option value="z-image">Z-Image (Artistic)</option>
-                      <option value="nano-banana">Nano Banana</option>
-                      <option value="nano-banana-pro">Nano Banana Pro</option>
-                      <option value="seedream">Seedream</option>
-                      <option value="seedream-4.5">Seedream 4.5</option>
-                      <option value="grok-imagine">Grok Imagine</option>
-                      <option value="nova-canvas">Nova Canvas</option>
-                    </optgroup>
-                    <optgroup label="Premium Tier">
-                      <option value="gpt-image">GPT Image</option>
-                      <option value="gpt-image-1.5">GPT Image 1.5</option>
-                      <option value="kontext">Kontext</option>
-                      <option value="klein">Klein</option>
-                    </optgroup>
-                  </select>
+        {/* Right: Language, Theme Colors & Single AI Engine / Settings Button */}
+        <div className="flex items-center gap-2 sm:gap-3 ml-auto">
+          {/* Theme Colors (compact) */}
+          <div className="hidden sm:flex items-center gap-1 bg-white/60 p-1 rounded-full border border-black/15">
+            {THEME_COLORS.map(color => (
+              <button 
+                key={color.value}
+                onClick={() => setAccentColor(color.value)}
+                className={cn(
+                  "w-4 h-4 rounded-full border border-black/20 transition-all hover:scale-125 flex-shrink-0 cursor-pointer",
+                  color.value === 'rainbow' && "animate-rainbow",
+                  accentColor === color.value ? "ring-2 ring-black scale-110" : "opacity-50 hover:opacity-90"
                 )}
-
-                {/* Auto Fallback Toggle Button */}
-                <button
-                  type="button"
-                  onClick={() => handleSetAutoFallback(!autoFallback)}
-                  className={cn(
-                    "flex items-center gap-0.5 px-1.5 py-0.5 rounded-full border border-black/20 text-[8px] font-mono font-bold transition-all shrink-0 cursor-pointer shadow-sm",
-                    autoFallback 
-                      ? "bg-emerald-400 text-black border-black hover:bg-emerald-300" 
-                      : "bg-rose-950 text-rose-200 border-black hover:bg-rose-900"
-                  )}
-                  title={autoFallback ? "Auto Fallback ON" : "Auto Fallback OFF"}
-                >
-                  <RotateCcw size={8} className={cn("shrink-0", autoFallback && "animate-spin-slow")} />
-                  <span>{autoFallback ? 'ON' : 'OFF'}</span>
-                </button>
-
-                {/* F-Lite Card Quick Button */}
-                <button
-                  type="button"
-                  onClick={() => setShowFLiteTextureModal(true)}
-                  className="flex items-center gap-0.5 px-1.5 py-0.5 rounded-full border border-black bg-amber-400 hover:bg-amber-300 text-black text-[8px] font-mono font-bold transition-all shrink-0 cursor-pointer shadow-sm"
-                  title="F-Lite Texture Model Card"
-                >
-                  <Sparkles size={8} className="shrink-0 text-black" />
-                  <span>F-Lite</span>
-                </button>
-
-                {/* Perchance DIY API Quick Button */}
-                <button
-                  type="button"
-                  onClick={() => setShowPerchanceModal(true)}
-                  className="flex items-center gap-0.5 px-1.5 py-0.5 rounded-full border border-purple-900 bg-purple-700 hover:bg-purple-600 text-white text-[8px] font-mono font-bold transition-all shrink-0 cursor-pointer shadow-sm"
-                  title="DIY Perchance Generator API"
-                >
-                  <Dices size={8} className="shrink-0 text-purple-200" />
-                  <span>Perchance</span>
-                </button>
-              </div>
-            </div>
+                style={color.value !== 'rainbow' ? { backgroundColor: color.value } : {}}
+                title={color.name}
+              />
+            ))}
           </div>
 
-          <button 
-             onClick={() => setEnableAnimations(!enableAnimations)}
-             className={cn(
-               "hidden xl:flex items-center gap-2 text-[10px] font-black uppercase opacity-60 hover:opacity-100 transition-opacity",
-               !enableAnimations && "line-through"
-             )}
+          {/* Language Selector */}
+          <div className="flex items-center gap-0.5 bg-white/80 rounded-full p-1 border-2 border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
+            {[
+              { code: 'en', label: 'EN' },
+              { code: 'he', label: 'עב' },
+              { code: 'fr', label: 'FR' },
+              { code: 'es', label: 'ES' },
+              { code: 'de', label: 'DE' }
+            ].map(lang => (
+              <button
+                key={lang.code}
+                onClick={() => setLanguage(lang.code as Language)}
+                className={cn(
+                  "px-2 py-0.5 rounded-full text-[10px] font-black transition-all cursor-pointer",
+                  language === lang.code 
+                    ? "bg-black text-white shadow-sm" 
+                    : "text-black/50 hover:text-black"
+                )}
+              >
+                {lang.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Active Image Engine & AI Settings Trigger (RULES.md §1) */}
+          <button
+            type="button"
+            onClick={() => setShowDiagnostics(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-black text-white hover:bg-neutral-800 rounded-full border-2 border-black text-[10px] sm:text-xs font-black uppercase transition-all shadow-[2px_2px_0px_0px_rgba(0,0,0,0.2)] cursor-pointer"
+            title={language === 'he' ? "הגדרות מנוע AI ומודלים" : "AI Engine & Studio Settings"}
           >
-            {t.toggleAnimations}
+            <span className={cn(
+              "w-2 h-2 rounded-full shrink-0",
+              imageEngine === 'gemini' ? "bg-purple-400" : imageEngine === 'huggingface' ? "bg-amber-400" : "bg-blue-400"
+            )} />
+            <span>
+              {imageEngine === 'gemini' ? 'Gemini' : imageEngine === 'huggingface' ? 'Hugging Face' : 'Pollinations'}
+            </span>
+            <span className="opacity-60">⚙️</span>
           </button>
         </div>
       </header>
@@ -2022,16 +1771,8 @@ export default function App() {
               <div className="flex items-center justify-between gap-2 mb-1">
                 <span className="text-xs font-bold uppercase opacity-80 flex items-center gap-1">
                   <Sparkles size={14} className="text-amber-300" />
-                  {language === 'he' ? "השראות ורעיונות לסיפור:" : "Story Inspirations & Generators:"}
+                  {language === 'he' ? "השראות ורעיונות לסיפור:" : language === 'fr' ? "Inspirations d'histoires :" : "Story Inspirations:"}
                 </span>
-                <button
-                  type="button"
-                  onClick={() => setShowPerchanceModal(true)}
-                  className="flex items-center gap-1.5 px-3 py-1 bg-gradient-to-r from-purple-700 to-indigo-700 hover:from-purple-600 hover:to-indigo-600 text-white rounded-full text-xs font-bold shadow-md transition-all cursor-pointer border border-purple-400/40"
-                >
-                  <Dices size={14} className="animate-spin-slow text-purple-200" />
-                  <span>{language === 'he' ? "מחולל Perchance API" : "Perchance Generator API"}</span>
-                </button>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 mb-3">
@@ -3118,24 +2859,37 @@ export default function App() {
                         </div>
                       ) : (
                         <div className="flex flex-col items-center justify-center h-full gap-4 text-center p-8">
-                          {isGenerating ? (
+                          {isGenerating || retryingPanelIndex === activePanel ? (
                             <div className="flex flex-col items-center gap-2">
                               <Loader2 className="animate-spin text-accent" size={48} />
-                              <p className="text-sm font-bold opacity-40">{t.steps.generating}</p>
+                              <p className="text-sm font-bold opacity-60">{t.steps.generating}</p>
                             </div>
                           ) : (
-                            <div className="flex flex-col items-center gap-4">
-                              <AlertCircle size={48} className="text-red-500 opacity-50" />
-                              <div>
-                                <p className="font-bold text-black/60 capitalize">Panel {activePanel + 1} Failed</p>
-                                <p className="text-xs opacity-40">AI was busy or had an issue</p>
+                            <div className="flex flex-col items-center gap-4 max-w-md">
+                              <AlertCircle size={48} className="text-red-500 opacity-70" />
+                              <div className="space-y-1">
+                                <p className="font-black text-black uppercase">
+                                  {language === 'he' ? `ציור פאנל ${activePanel + 1} נכשל` : `Panel ${activePanel + 1} Image Failed`}
+                                </p>
+                                <p className="text-xs text-black/60 font-medium line-clamp-3">
+                                  {panelError || (language === 'he' ? 'מנוע התמונות החזיר שגיאת מכסה או חיבור. ניתן לנסות שוב או להחליף מנוע בהגדרות.' : 'The selected image engine returned an error or quota limit. Retry or switch image engine in AI Settings.')}
+                                </p>
                               </div>
-                              <button 
-                                onClick={() => retryPanel(activePanel)}
-                                className="flex items-center gap-2 px-6 py-2 bg-black text-white rounded-full font-black text-sm hover:scale-105 active:scale-95 transition-transform"
-                              >
-                                <Sparkles size={16} /> {t.retry}
-                              </button>
+                              <div className="flex flex-wrap items-center justify-center gap-2">
+                                <button 
+                                  onClick={() => retryPanel(activePanel)}
+                                  className="flex items-center gap-2 px-6 py-2.5 bg-black text-accent rounded-full font-black text-xs uppercase hover:scale-105 active:scale-95 transition-transform cursor-pointer border-2 border-black"
+                                >
+                                  <Sparkles size={15} /> {t.retry}
+                                </button>
+                                <button 
+                                  onClick={() => setShowDiagnostics(true)}
+                                  className="flex items-center gap-1.5 px-4 py-2.5 bg-white text-black rounded-full font-black text-xs uppercase hover:bg-neutral-100 transition-colors cursor-pointer border-2 border-black"
+                                >
+                                  <span>⚙️</span>
+                                  <span>{language === 'he' ? 'החלף מנוע AI' : 'Switch AI Engine'}</span>
+                                </button>
+                              </div>
                             </div>
                           )}
                         </div>
@@ -3256,11 +3010,17 @@ export default function App() {
                         setActivePanel(i);
                       }}
                       className={cn(
-                        "flex-shrink-0 w-24 h-24 rounded-xl border-4 overflow-hidden transition-all",
+                        "flex-shrink-0 w-24 h-24 rounded-xl border-4 overflow-hidden transition-all bg-white",
                         activePanel === i ? "border-black scale-110 shadow-lg" : "border-black/10 grayscale opacity-50 hover:opacity-100"
                       )}
                     >
-                      <img src={p.imageUrl} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                      {p.imageUrl ? (
+                        <img src={p.imageUrl} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                      ) : (
+                        <div className="w-full h-full flex flex-col items-center justify-center bg-gray-100 text-xs font-black text-black/50">
+                          <span>#{i + 1}</span>
+                        </div>
+                      )}
                     </button>
                   ))}
                 </div>
@@ -3313,10 +3073,16 @@ export default function App() {
                               {char.drawnPortraitUrl ? (
                                 <img src={char.drawnPortraitUrl} alt="Comic Output" className="w-full h-full object-cover" />
                               ) : (
-                                <div className="w-full h-full flex flex-col items-center justify-center bg-gray-100 text-[10px] font-black text-gray-400 p-1 leading-tight">
+                                <button
+                                  type="button"
+                                  disabled={isDrawnPortraitGenerating}
+                                  onClick={() => drawCharacterPortraitOnDemand(idx)}
+                                  className="w-full h-full flex flex-col items-center justify-center bg-orange-50 hover:bg-orange-100 text-[9px] font-black text-[#FF6321] p-1 leading-tight cursor-pointer transition-colors"
+                                  title={language === 'he' ? "לחץ לציור דמות" : "Click to draw character portrait"}
+                                >
                                   <span>🎨</span>
-                                  <span>{language === 'he' ? "מצייר..." : "Drawing..."}</span>
-                                </div>
+                                  <span>{isDrawnPortraitGenerating ? (language === 'he' ? "מצייר..." : "Drawing...") : (language === 'he' ? "צייר דמות" : "Draw")}</span>
+                                </button>
                               )}
                             </div>
                           </div>
@@ -3360,344 +3126,292 @@ export default function App() {
         </MotionConfig>
       </main>
 
-      <footer className="relative z-10 py-12 px-6 text-center mt-auto no-print space-y-4 max-w-2xl mx-auto">
-        {/* Clickable Interactive Token & Pricing Pill */}
-        <button
-          onClick={() => setShowDiagnostics(true)}
-          className="inline-flex flex-col md:flex-row items-center justify-between gap-4 bg-white border-4 border-black p-4 rounded-3xl hover:scale-[1.02] active:scale-[0.98] cursor-pointer transition-transform shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] text-xs font-black text-black w-full"
-        >
-          <div className="flex items-center gap-2">
-            <span className="relative flex h-3.5 w-3.5">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-emerald-500"></span>
-            </span>
-            <span className="uppercase tracking-wider">
-              {language === 'he' ? "סטטוס חיבור AI: פעיל" : language === 'fr' ? "Statut API IA : Actif" : "AI Connection: Active"}
-            </span>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3 text-[11px]">
-            <span className="bg-[#FFB800] text-black font-black px-2.5 py-1 rounded-xl border-2 border-black font-mono">
-              {language === 'he' ? `עלות: $${totalCostUSD.toFixed(5)}` : language === 'fr' ? `Coût : $${totalCostUSD.toFixed(5)}` : `Cost: $${totalCostUSD.toFixed(5)}`}
-            </span>
-            <span className="bg-black text-[#FFB800] font-black px-2.5 py-1 rounded-xl border-2 border-black font-mono">
-              {language === 'he' ? `יתרה: ${(SESSION_CREDIT - totalTokens).toLocaleString()}` : language === 'fr' ? `Reste : ${(SESSION_CREDIT - totalTokens).toLocaleString()}` : `Left: ${(SESSION_CREDIT - totalTokens).toLocaleString()}`}
-            </span>
-            <span className="opacity-70 font-mono">
-              {language === 'he' ? `אסימונים: ${totalTokens.toLocaleString()}` : language === 'fr' ? `Jetons : ${totalTokens.toLocaleString()}` : `Tokens: ${totalTokens.toLocaleString()}`}
-            </span>
-            <span className="text-accent font-black uppercase hover:underline flex items-center gap-1">
-              {language === 'he' ? "פרטים ➔" : language === 'fr' ? "Détails ➔" : "Details ➔"}
-            </span>
-          </div>
-        </button>
-
+      <footer className="relative z-10 py-8 px-6 text-center mt-auto no-print max-w-2xl mx-auto">
         <div className="text-[11px] font-bold uppercase opacity-60 space-y-1 text-center">
-          <div>Comicskido &copy; 2026 • Personalized Story Book Builder</div>
-          <div className="flex items-center justify-center gap-2 text-accent font-black tracking-wide">
-            <span title="Application Version">{VERSION_NUMBER}</span>
+          <div>Comicskido &copy; 2026 • Personalized Story Book Studio</div>
+          <div className="flex items-center justify-center gap-2 text-black/70 font-black tracking-wide">
+            <span>{VERSION_NUMBER}</span>
             <span>•</span>
-            <span title="Deployment Build Timestamp">Build: {BUILD_NUMBER}</span>
+            <span>Build: {BUILD_NUMBER}</span>
           </div>
         </div>
       </footer>
 
-      {/* Detailed Diagnostics Pop-up Drawer */}
+      {/* Clean AI Engine & Studio Settings Modal */}
       <AnimatePresence>
         {showDiagnostics && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 no-print">
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 no-print" onClick={() => setShowDiagnostics(false)}>
             <motion.div
-              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              initial={{ scale: 0.95, opacity: 0, y: 15 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              className="bg-[#FAF9F6] border-4 border-black p-6 rounded-[2rem] shadow-[12px_12px_0px_0px_rgba(0,0,0,1)] max-w-md w-full text-black relative space-y-6 overflow-hidden max-h-[90vh] overflow-y-auto"
+              exit={{ scale: 0.95, opacity: 0, y: 15 }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-[#FAF9F6] border-4 border-black p-6 rounded-[2rem] shadow-[12px_12px_0px_0px_rgba(0,0,0,1)] max-w-lg w-full text-black relative space-y-5 overflow-hidden max-h-[90vh] overflow-y-auto"
               dir={isRTL ? "rtl" : "ltr"}
             >
               {/* Heading */}
-              <div className="border-b-4 border-black pb-4 flex justify-between items-start">
+              <div className="border-b-3 border-black pb-3 flex justify-between items-center">
                 <div className={cn("flex-1", isRTL ? "text-right" : "text-left")}>
-                  <h2 className="text-2xl font-black uppercase italic tracking-tight text-black">
-                    {language === 'he' ? "מרכז אבחון ועלויות AI" : language === 'fr' ? "Diagnostic & Coûts IA" : "AI Diagnostics & Cost"}
+                  <h2 className="text-xl sm:text-2xl font-black uppercase italic tracking-tight text-black">
+                    {language === 'he' ? "הגדרות מנוע AI ומודלים" : language === 'fr' ? "Paramètres Moteur IA" : "AI Engine & Model Settings"}
                   </h2>
-                  <p className="text-xs font-bold text-black/60 uppercase mt-0.5">
-                    {language === 'he' ? "פירוט איוש ואסימוני מערכת מדויק" : language === 'fr' ? "Métriques réelles de jetons et prix" : "Real-time Token Metrics & Cost Ledger"}
+                  <p className="text-xs font-bold text-black/60 mt-0.5">
+                    {language === 'he' ? "בחירת מנוע ציור קומיקס ומנוע כתיבת עלילה" : "Choose your preferred Image & Story AI engines"}
                   </p>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => setShowDiagnostics(false)}
+                  className="w-8 h-8 rounded-full bg-black text-white font-black text-sm flex items-center justify-center hover:bg-neutral-800 cursor-pointer"
+                >
+                  ✕
+                </button>
               </div>
 
-              {/* Version & Build Explained Section */}
-              <div className="bg-white border-2 border-black p-3.5 rounded-2xl space-y-2 text-xs">
-                <div className="flex justify-between items-center font-black uppercase text-[10px] text-black/70">
-                  <span>
-                    {language === 'he' ? "גרסה ומספר גרסת בנייה:" : language === 'fr' ? "Version & Tag de Build :" : "Version & Build Info:"}
-                  </span>
-                  <span className="text-accent font-mono font-bold">{VERSION_NUMBER} ({BUILD_NUMBER})</span>
-                </div>
-                <div className="text-[10px] text-black/80 font-medium space-y-1 leading-relaxed">
-                  <p>
-                    <strong>{VERSION_NUMBER}:</strong> {language === 'he' ? "מהדורת התכונות והעיצוב של האפליקציה." : "Application feature release tag."}
-                  </p>
-                  <p>
-                    <strong>Build ({BUILD_NUMBER}):</strong> {language === 'he' ? "חתימת זמני הפריסה המדויקים בשרת." : "Deployment build timestamp identifier."}
-                  </p>
-                  <p className="text-emerald-700 font-bold">
-                    ✓ Google Gemini API Key: {language === 'he' ? "מחובר ומאומת בשרת דרך process.env.GEMINI_API_KEY" : "Active & connected on server via process.env.GEMINI_API_KEY"}
-                  </p>
-                </div>
-              </div>
-
-              {/* API Status Table */}
-              <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-2 text-xs font-bold">
-                  <div className={cn("bg-[#EFECE6] p-3 rounded-2xl border-2 border-black", isRTL ? "text-right" : "text-left")}>
-                    <span className="block text-[9px] uppercase opacity-60 font-black tracking-wider mb-1">
-                      {language === 'he' ? "תגובה אחרונה" : language === 'fr' ? "Dernier Statut" : "Last API Status"}
-                    </span>
-                    <span className="font-mono text-emerald-700 leading-tight block truncate" title={aiStats.lastApiStatus}>
-                      {aiStats.lastApiStatus}
-                    </span>
-                  </div>
-                  <div className={cn("bg-[#EFECE6] p-3 rounded-2xl border-2 border-black", isRTL ? "text-right" : "text-left")}>
-                    <span className="block text-[9px] uppercase opacity-60 font-black tracking-wider mb-1">
-                      {language === 'he' ? "זמן תגובה" : language === 'fr' ? "Temps réponse" : "Latency"}
-                    </span>
-                    <span className="font-mono text-black leading-tight block">
-                      {aiStats.lastApiResponseTimeMs ? `${aiStats.lastApiResponseTimeMs.toLocaleString()}ms` : "0ms"}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Token Usage Gauge */}
-                <div className="bg-white border-2 border-black p-4 rounded-2xl space-y-3">
-                  <div className="flex justify-between text-xs font-black uppercase tracking-wide">
-                    <span>{language === 'he' ? "מכסת אסימונים לסשן" : language === 'fr' ? "Crédit de Session" : "Session Token Credit"}</span>
-                    <span className="font-mono">
-                      {totalTokens.toLocaleString()} / {SESSION_CREDIT.toLocaleString()}
-                    </span>
-                  </div>
-                  
-                  {/* Progress bar */}
-                  <div className="w-full h-4 bg-gray-100 border-2 border-black rounded-full overflow-hidden p-0.5">
-                    <div 
-                      className="h-full bg-accent rounded-full transition-all duration-300"
-                      style={{ width: `${Math.min(100, (totalTokens / SESSION_CREDIT) * 100)}%` }}
-                    />
-                  </div>
-                  <p className="text-[10px] text-black/50 leading-relaxed font-semibold">
-                    {language === 'he' 
-                      ? "* אסימונים מדמים מגבלת בטיחות הוגנת לכל הפעלה." 
-                      : language === 'fr'
-                      ? "* Standard simulateur de crédit de sécurité pour l'environnement de bac à sable."
-                      : "* Playground safety credit ensures heavy concurrent operations run smoothly."}
-                  </p>
-                </div>
-
-                {/* Manual Image Generation Model Engine Selector Card */}
-                <div className="bg-white border-2 border-black p-4 rounded-2xl space-y-3">
-                  <div className="flex justify-between items-center">
-                    <h4 className={cn("text-xs font-black uppercase tracking-wider text-black", isRTL ? "text-right" : "text-left")}>
-                      {language === 'he' ? "בחירת מנוע מחולל תמונות (מגוון מודלים):" : "Image AI Engine (Multi-Model Selector):"}
-                    </h4>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs font-bold">
-                    <button
-                      type="button"
-                      onClick={() => handleSetImageEngine('gemini')}
-                      className={cn(
-                        "p-3 rounded-2xl border-2 border-black text-left flex flex-col gap-1 transition-all cursor-pointer",
-                        imageEngine === 'gemini' 
-                          ? "bg-purple-900 text-white shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]" 
-                          : "bg-gray-100 text-black/60 hover:bg-gray-200"
-                      )}
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="font-extrabold uppercase text-[10px]">Google Gemini</span>
-                        {imageEngine === 'gemini' && <span className="text-amber-300 font-mono text-[9px] font-black">● ACTIVE</span>}
-                      </div>
-                      <span className="text-[9px] opacity-80 leading-tight">
-                        gemini-3.1-flash-image (Pure Google AI)
-                      </span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => handleSetImageEngine('huggingface')}
-                      className={cn(
-                        "p-3 rounded-2xl border-2 border-black text-left flex flex-col gap-1 transition-all cursor-pointer",
-                        imageEngine === 'huggingface' 
-                          ? "bg-amber-400 text-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]" 
-                          : "bg-gray-100 text-black/60 hover:bg-gray-200"
-                      )}
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="font-extrabold uppercase text-[10px]">Hugging Face</span>
-                        {imageEngine === 'huggingface' && <span className="font-mono text-[9px] font-black">● ACTIVE</span>}
-                      </div>
-                      <span className="text-[9px] opacity-80 leading-tight">
-                        FLUX.1-schnell & SDXL (HF Token Auth)
-                      </span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => handleSetImageEngine('pollinations')}
-                      className={cn(
-                        "p-3 rounded-2xl border-2 border-black text-left flex flex-col gap-1 transition-all cursor-pointer",
-                        imageEngine === 'pollinations' 
-                          ? "bg-blue-600 text-white shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]" 
-                          : "bg-gray-100 text-black/60 hover:bg-gray-200"
-                      )}
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="font-extrabold uppercase text-[10px]">Pollinations AI</span>
-                        {imageEngine === 'pollinations' && <span className="font-mono text-[9px] font-black text-white">● ACTIVE</span>}
-                      </div>
-                      <span className="text-[9px] opacity-80 leading-tight">
-                        pollinations-{pollinationsSubModel} (20+ Models)
-                      </span>
-                    </button>
-                  </div>
-                </div>
-
-                {/* Automatic Model Fallback Switch Control Card */}
-                <div className="bg-amber-100/90 border-2 border-black p-4 rounded-2xl space-y-2">
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="flex items-start gap-3">
-                      <RotateCcw size={20} className="text-black shrink-0 mt-0.5" />
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h4 className="text-xs font-black uppercase text-black">
-                            {language === 'he' ? "החלפת מודל אוטומטית במקרה של שגיאה (Automatic Model Fallback)" : "Automatic Model Fallback"}
-                          </h4>
-                          <span className={cn(
-                            "px-2 py-0.5 rounded-full text-[9px] font-mono font-black border border-black uppercase",
-                            autoFallback ? "bg-emerald-400 text-black" : "bg-rose-950 text-rose-200"
-                          )}>
-                            {autoFallback ? 'ENABLED' : 'DISABLED'}
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-zinc-800 leading-snug mt-1">
-                          {language === 'he'
-                            ? "כאשר המפסק כבוי: השרת **לא יבצע Fallback** למודלים משניים במידה והמודל שנבחר נכשל. הוא יחזיר שגיאה ישירה ללקוח."
-                            : "When OFF: the server will **NOT fallback** to backup sub-models if the selected engine/model fails. It will throw a direct error to the client."}
-                        </p>
-                      </div>
-                    </div>
-                    <label className="relative inline-flex items-center cursor-pointer shrink-0">
-                      <input 
-                        type="checkbox" 
-                        checked={autoFallback} 
-                        onChange={(e) => handleSetAutoFallback(e.target.checked)}
-                        className="sr-only peer"
-                      />
-                      <div className="w-12 h-6 bg-zinc-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-black after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-black after:border-2 after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500 border-2 border-black"></div>
-                    </label>
-                  </div>
-                </div>
-
-                {/* Exact Cost Breakdown */}
-                <div className="space-y-2">
-                  <h4 className={cn("text-xs font-black uppercase tracking-wider text-black/60", isRTL ? "text-right" : "text-left")}>
-                    {language === 'he' ? "פירוט עלות ייצור מדויק (USD)" : language === 'fr' ? "Détail de facturation brute" : "Precise Production Cost Ledger"}
+              {/* 1. Image AI Engine Selection */}
+              <div className="bg-white border-2 border-black p-4 rounded-2xl space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-black uppercase tracking-wider text-black flex items-center gap-1.5">
+                    <ImageIcon size={14} className="text-purple-600" />
+                    <span>{language === 'he' ? "1. מנוע ציור תמונות (Image AI)" : "1. Comic Image AI Engine"}</span>
                   </h4>
-                  
-                  <div className="bg-[#E9E6DC] border-2 border-black rounded-2xl overflow-hidden divide-y-2 divide-black/10 font-mono text-[11px] font-bold">
-                    {/* Input Tokens */}
-                    <div className="p-2.5 flex justify-between items-center bg-white/20">
-                      <span className="opacity-75 text-[10px]">Story Prompts ({aiStats.textModelName})</span>
-                      <span className="font-mono">
-                        {aiStats.textPromptTokens.toLocaleString()} tkn ≈ ${textPromptCost.toFixed(5)}
-                      </span>
-                    </div>
-
-                    {/* Output Tokens */}
-                    <div className="p-2.5 flex justify-between items-center bg-white/20">
-                      <span className="opacity-75 text-[10px]">Story Outcomes ({aiStats.textModelName})</span>
-                      <span className="font-mono">
-                        {aiStats.textCompletionTokens.toLocaleString()} tkn ≈ ${textCompletionCost.toFixed(5)}
-                      </span>
-                    </div>
-
-                    {/* Character images */}
-                    <div className="p-2.5 flex justify-between items-center bg-white/20">
-                      <span className="opacity-75 text-[10px]">Portraits ({aiStats.imageModelName})</span>
-                      <span className="font-mono">
-                        {aiStats.characterCalls} cards ≈ ${characterCost.toFixed(3)}
-                      </span>
-                    </div>
-
-                    {/* Panels */}
-                    <div className="p-2.5 flex justify-between items-center bg-white/20">
-                      <span className="opacity-75 text-[10px]">Comic Panels ({aiStats.imageModelName})</span>
-                      <span className="font-mono">
-                        {aiStats.imageCalls} panels ≈ ${imageCost.toFixed(3)}
-                      </span>
-                    </div>
-
-                    {/* Total */}
-                    <div className="p-2.5 flex justify-between items-center bg-black text-[#FFB800] uppercase font-black tracking-wide text-xs">
-                      <span>{language === 'he' ? "סה\"כ עלות ייצור" : language === 'fr' ? "Coût Total Estimé" : "Total Generated Cost"}</span>
-                      <span className="font-mono">${totalCostUSD.toFixed(5)} USD</span>
-                    </div>
-                  </div>
-                  
-                  <div className="text-[9px] text-[#A05C2B] leading-normal font-bold">
-                    {language === 'he' ? (
-                      `* מחושב במדויק לפי תעריפי Google AI המעודכנים: $0.075 למליון אסימוני קלט, $0.30 למליון אסימוני פלט, ו-$0.03 לכל ייצור תמונת קומיקס.`
-                    ) : language === 'fr' ? (
-                      `* Calculé strictement sur les tarifs d'API GCP réels : $0,075/1M jetons d'entrée, $0,30/1M jetons de sortie et $0,03 par génération d'image de bande dessinée.`
-                    ) : (
-                      `* Calculated directly with live GCP service prices: $0.075 per 1M prompt input tokens, $0.30 per 1M completion output tokens, and $0.03 per image portrait/panel generation.`
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs font-bold">
+                  <button
+                    type="button"
+                    onClick={() => handleSetImageEngine('gemini')}
+                    className={cn(
+                      "p-3 rounded-xl border-2 border-black text-left flex flex-col gap-1 transition-all cursor-pointer",
+                      imageEngine === 'gemini' 
+                        ? "bg-purple-900 text-white shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]" 
+                        : "bg-gray-100 text-black/70 hover:bg-gray-200"
                     )}
-                  </div>
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-extrabold uppercase text-[10px]">Google Gemini</span>
+                      {imageEngine === 'gemini' && <span className="text-amber-300 font-mono text-[9px] font-black">●</span>}
+                    </div>
+                    <span className="text-[9px] opacity-80 leading-tight">Gemini Image API</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleSetImageEngine('huggingface')}
+                    className={cn(
+                      "p-3 rounded-xl border-2 border-black text-left flex flex-col gap-1 transition-all cursor-pointer",
+                      imageEngine === 'huggingface' 
+                        ? "bg-amber-400 text-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]" 
+                        : "bg-gray-100 text-black/70 hover:bg-gray-200"
+                    )}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-extrabold uppercase text-[10px]">Hugging Face</span>
+                      {imageEngine === 'huggingface' && <span className="font-mono text-[9px] font-black">●</span>}
+                    </div>
+                    <span className="text-[9px] opacity-80 leading-tight">FLUX.1 & SDXL</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleSetImageEngine('pollinations')}
+                    className={cn(
+                      "p-3 rounded-xl border-2 border-black text-left flex flex-col gap-1 transition-all cursor-pointer",
+                      imageEngine === 'pollinations' 
+                        ? "bg-blue-600 text-white shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]" 
+                        : "bg-gray-100 text-black/70 hover:bg-gray-200"
+                    )}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-extrabold uppercase text-[10px]">Pollinations</span>
+                      {imageEngine === 'pollinations' && <span className="font-mono text-[9px] font-black text-white">●</span>}
+                    </div>
+                    <span className="text-[9px] opacity-80 leading-tight">Free Open Flux</span>
+                  </button>
+                </div>
+
+                {/* Active Image Sub-Model Picker */}
+                <div className="pt-1">
+                  <label className="block text-[10px] font-black uppercase text-black/60 mb-1">
+                    {language === 'he' ? "מודל תמונות פעיל:" : "Active Image Sub-Model:"}
+                  </label>
+                  {imageEngine === 'gemini' ? (
+                    <select
+                      value={geminiSubModel}
+                      onChange={(e) => handleSetGeminiSubModel(e.target.value as GeminiImageSubModel)}
+                      className="w-full bg-purple-950 text-purple-100 border-2 border-black rounded-xl px-3 py-2 text-xs font-mono font-bold cursor-pointer"
+                    >
+                      <option value="gemini-3.1-flash-image">Gemini 3.1 Flash Image (Nano Banana 2)</option>
+                      <option value="gemini-nano-banana-2.1">Gemini Nano Banana 2.1 (Latest)</option>
+                      <option value="gemini-3-pro-image">Gemini 3 Pro Image (Nano Banana Pro)</option>
+                      <option value="gemini-3.1-flash-lite-image">Gemini 3.1 Flash Lite Image (Nano Banana 2 Lite)</option>
+                      <option value="gemini-2.5-flash-image">Gemini 2.5 Flash Image (Nano Banana)</option>
+                    </select>
+                  ) : imageEngine === 'huggingface' ? (
+                    <select
+                      value={hfSubModel}
+                      onChange={(e) => handleSetHfSubModel(e.target.value as HuggingFaceSubModel)}
+                      className="w-full bg-black text-amber-300 border-2 border-black rounded-xl px-3 py-2 text-xs font-mono font-bold cursor-pointer"
+                    >
+                      <option value="black-forest-labs/FLUX.1-schnell">FLUX.1 Schnell (Fastest)</option>
+                      <option value="black-forest-labs/FLUX.1-dev">FLUX.1 Dev (High Detail)</option>
+                      <option value="stabilityai/stable-diffusion-3.5-large">Stable Diffusion 3.5 Large</option>
+                      <option value="stabilityai/stable-diffusion-3.5-large-turbo">Stable Diffusion 3.5 Large Turbo</option>
+                      <option value="ByteDance/SDXL-Lightning">SDXL Lightning</option>
+                      <option value="stabilityai/stable-diffusion-xl-base-1.0">Stable Diffusion XL 1.0</option>
+                    </select>
+                  ) : (
+                    <select
+                      value={pollinationsSubModel}
+                      onChange={(e) => handleSetPollinationsSubModel(e.target.value as PollinationsSubModel)}
+                      className="w-full bg-blue-950 text-blue-100 border-2 border-black rounded-xl px-3 py-2 text-xs font-mono font-bold cursor-pointer"
+                    >
+                      <option value="flux">Pollinations FLUX (Default)</option>
+                      <option value="sana">Pollinations Sana</option>
+                      <option value="turbo">Pollinations Turbo</option>
+                    </select>
+                  )}
                 </div>
               </div>
 
-              {/* Open Terminal Logs Button */}
-              <button
-                type="button"
-                onClick={() => {
-                  setShowDiagnostics(false);
-                  setShowTerminalLogs(true);
-                }}
-                className="w-full py-3 bg-gradient-to-r from-gray-900 to-black text-amber-400 border-4 border-black rounded-2xl font-black uppercase text-xs flex items-center justify-center gap-2 hover:scale-[1.02] active:scale-[0.98] transition-all shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]"
-              >
-                <Terminal size={16} />
-                {language === 'he' ? "פתח חלון לוגים וטרמינל בזמן אמת" : language === 'fr' ? "Ouvrir le Terminal & Logs en Direct" : "Open Live AI Terminal & Logs Window"}
-              </button>
+              {/* 2. Story Decomposition AI Engine Selection */}
+              <div className="bg-white border-2 border-black p-4 rounded-2xl space-y-3">
+                <h4 className="text-xs font-black uppercase tracking-wider text-black flex items-center gap-1.5">
+                  <BookOpen size={14} className="text-amber-600" />
+                  <span>{language === 'he' ? "2. מנוע פירוק עלילה (Story AI)" : "2. Story Decomposition AI"}</span>
+                </h4>
+                <div className="grid grid-cols-2 gap-2 text-xs font-bold">
+                  <button
+                    type="button"
+                    onClick={() => handleSetStoryEngine('gemini')}
+                    className={cn(
+                      "p-2.5 rounded-xl border-2 border-black text-left transition-all cursor-pointer",
+                      storyEngine === 'gemini'
+                        ? "bg-purple-900 text-white shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
+                        : "bg-gray-100 text-black/70 hover:bg-gray-200"
+                    )}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-extrabold uppercase text-[10px]">Google Gemini</span>
+                      {storyEngine === 'gemini' && <span className="text-amber-300 font-mono text-[9px]">●</span>}
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSetStoryEngine('huggingface')}
+                    className={cn(
+                      "p-2.5 rounded-xl border-2 border-black text-left transition-all cursor-pointer",
+                      storyEngine === 'huggingface'
+                        ? "bg-amber-400 text-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
+                        : "bg-gray-100 text-black/70 hover:bg-gray-200"
+                    )}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-extrabold uppercase text-[10px]">Hugging Face LLM</span>
+                      {storyEngine === 'huggingface' && <span className="font-mono text-[9px]">●</span>}
+                    </div>
+                  </button>
+                </div>
+
+                {storyEngine === 'gemini' ? (
+                  <select
+                    value={geminiStorySubModel}
+                    onChange={(e) => handleSetGeminiStorySubModel(e.target.value as GeminiStorySubModel)}
+                    className="w-full bg-purple-950 text-purple-100 border-2 border-black rounded-xl px-3 py-2 text-xs font-mono font-bold cursor-pointer"
+                  >
+                    <option value="gemini-3.8-flash">Gemini 3.8 Flash (Newest)</option>
+                    <option value="gemini-3.7-flash">Gemini 3.7 Flash</option>
+                    <option value="gemini-3.6-flash">Gemini 3.6 Flash (Recommended)</option>
+                    <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
+                    <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro</option>
+                  </select>
+                ) : (
+                  <select
+                    value={hfStorySubModel}
+                    onChange={(e) => handleSetHfStorySubModel(e.target.value as HfStorySubModel)}
+                    className="w-full bg-black text-amber-300 border-2 border-black rounded-xl px-3 py-2 text-xs font-mono font-bold cursor-pointer"
+                  >
+                    <option value="Qwen/Qwen2.5-72B-Instruct">Qwen 2.5 (72B Instruct)</option>
+                    <option value="meta-llama/Llama-3.3-70B-Instruct">Meta Llama 3.3 (70B Instruct)</option>
+                    <option value="Qwen/Qwen2.5-7B-Instruct">Qwen 2.5 (7B Instruct)</option>
+                    <option value="meta-llama/Llama-3.2-3B-Instruct">Meta Llama 3.2 (3B Instruct)</option>
+                    <option value="google/gemma-3-27b-it">Google Gemma 3 (27B)</option>
+                    <option value="google/gemma-3-4b-it">Google Gemma 3 (4B)</option>
+                  </select>
+                )}
+              </div>
+
+              {/* 3. Auto-Fallback Toggle & Animations */}
+              <div className="bg-amber-50 border-2 border-black p-4 rounded-2xl space-y-3">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <h4 className="text-xs font-black uppercase text-black">
+                      {language === 'he' ? "גיבוי תת-מודלים אוטומטי (Auto-Fallback)" : "Sub-Model Auto-Fallback"}
+                    </h4>
+                    <p className="text-[11px] text-black/70 leading-snug mt-0.5">
+                      {language === 'he'
+                        ? "כאשר פעיל: מנסה תת-מודל נוסף מאותו ספק אם המודל הראשי עמוס (ללא מעבר שקט ל-Pollinations)."
+                        : "When enabled: tries backup sub-models within the same provider if the primary model is busy (never switches silently to Pollinations)."}
+                    </p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                    <input 
+                      type="checkbox" 
+                      checked={autoFallback} 
+                      onChange={(e) => handleSetAutoFallback(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-12 h-6 bg-zinc-300 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-black after:border-2 after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500 border-2 border-black"></div>
+                  </label>
+                </div>
+              </div>
+
+              {/* Secondary Developer Tools Row */}
+              <div className="flex items-center justify-between gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowDiagnostics(false);
+                    setShowTerminalLogs(true);
+                  }}
+                  className="flex-1 py-2.5 px-3 bg-neutral-900 text-amber-400 border-2 border-black rounded-xl font-black uppercase text-[11px] flex items-center justify-center gap-1.5 hover:bg-black cursor-pointer"
+                >
+                  <Terminal size={14} />
+                  <span>{language === 'he' ? "לוגים חיים" : "Live Logs"}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowDiagnostics(false);
+                    setShowModelReportModal(true);
+                  }}
+                  className="flex-1 py-2.5 px-3 bg-white text-black border-2 border-black rounded-xl font-black uppercase text-[11px] flex items-center justify-center gap-1.5 hover:bg-neutral-100 cursor-pointer"
+                >
+                  <BarChart2 size={14} />
+                  <span>{language === 'he' ? "דוח מודלים" : "Model Report"}</span>
+                </button>
+              </div>
 
               {/* Close Button */}
               <button
                 type="button"
                 onClick={() => setShowDiagnostics(false)}
-                className="w-full py-3.5 bg-black text-[#FFB800] rounded-2xl border-4 border-black font-black uppercase text-xs hover:bg-[#FF6321] hover:text-black transition-colors shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:shadow-none translate-x-0 active:translate-x-1 active:translate-y-1 block"
+                className="w-full py-3 bg-black text-accent rounded-2xl border-2 border-black font-black uppercase text-xs hover:bg-neutral-800 transition-colors cursor-pointer"
               >
-                {language === 'he' ? "סגור לוח אבחון" : language === 'fr' ? "Fermer les paramètres" : "Close Diagnostics"}
+                {language === 'he' ? "שמור וסגור" : language === 'fr' ? "Fermer" : "Done"}
               </button>
             </motion.div>
           </div>
         )}
       </AnimatePresence>
 
-      {/* Floating Terminal Trigger Button */}
-      <button
-        type="button"
-        onClick={() => setShowTerminalLogs(true)}
-        title="Open Live AI Terminal & System Logs"
-        className="fixed bottom-4 right-4 z-40 bg-[#111827] text-amber-400 border-4 border-black px-3.5 py-2.5 rounded-2xl font-black uppercase text-xs flex items-center gap-2 shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] hover:scale-105 active:scale-95 transition-all no-print font-mono cursor-pointer"
-      >
-        <Terminal size={16} className="text-emerald-400 animate-pulse" />
-        <span>Live Terminal Logs</span>
-      </button>
-
-      {/* Terminal Logs Modal Component */}
+      {/* Terminal Logs Modal Component (accessible via AI Settings) */}
       <TerminalLogsModal
         isOpen={showTerminalLogs}
         onClose={() => setShowTerminalLogs(false)}
         language={language}
       />
 
-      {/* Model Usage Summary Report Modal */}
+      {/* Model Usage Summary Report Modal (accessible via AI Settings) */}
       <ModelReportModal
         isOpen={showModelReportModal}
         onClose={() => setShowModelReportModal(false)}
@@ -3705,18 +3419,9 @@ export default function App() {
         language={language}
       />
 
-      {/* Freepik / F-Lite-Texture (10B) Model Card Modal */}
       <FLiteTextureModelCard
         isOpen={showFLiteTextureModal}
         onClose={() => setShowFLiteTextureModal(false)}
-        language={language}
-      />
-
-      {/* DIY Perchance Generator API Modal */}
-      <PerchanceModal
-        isOpen={showPerchanceModal}
-        onClose={() => setShowPerchanceModal(false)}
-        onInsertPrompt={(txt) => setStoryText(prev => prev ? `${prev}\n${txt}` : txt)}
         language={language}
       />
 

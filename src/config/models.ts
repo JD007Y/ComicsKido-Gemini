@@ -1,8 +1,8 @@
 /**
  * Central Configuration for All AI & Image Models Accessed by the Application.
- * 
- * This file serves as the single source of truth defining all AI models, 
- * image generation engines, text reasoning models, and multimodal vision models 
+ *
+ * This file serves as the single source of truth defining all AI models,
+ * image generation engines, text reasoning models, and multimodal vision models
  * accessed in both the server backend and client frontend.
  */
 
@@ -27,45 +27,71 @@ export interface ModelEngineConfig {
  * All Image Generation Models accessed across the application
  */
 export const IMAGE_MODELS = {
-  // Hugging Face Models
+  // Google Gemini Image Models (Verified Live in v1beta)
+  GEMINI_31_FLASH_IMAGE: {
+    id: "gemini-3.1-flash-image",
+    name: "Gemini 3.1 Flash Image (Nano Banana 2)",
+    provider: "Google Gemini",
+    type: "image",
+    description: "Primary fast multimodal image generation model from Google.",
+    strengths: "High-speed multimodal generation with strong character likeness preservation",
+    isPrimary: true,
+  } as ModelDefinition,
+
+  GEMINI_NANO_BANANA_21: {
+    id: "gemini-nano-banana-2.1",
+    name: "Gemini Nano Banana 2.1",
+    provider: "Google Gemini",
+    type: "image",
+    description: "Latest generation Nano Banana 2.1 image model for vivid comic art.",
+    strengths: "Enhanced color vibrancy, crisp comic linework, expressive character faces",
+  } as ModelDefinition,
+
+  GEMINI_3_PRO_IMAGE: {
+    id: "gemini-3-pro-image",
+    name: "Gemini 3 Pro Image (Nano Banana Pro)",
+    provider: "Google Gemini",
+    type: "image",
+    description: "Pro-tier high-resolution image generation model.",
+    strengths: "Maximum detail resolution, cinematic panel layout composition",
+  } as ModelDefinition,
+
+  GEMINI_31_FLASH_LITE_IMAGE: {
+    id: "gemini-3.1-flash-lite-image",
+    name: "Gemini 3.1 Flash Lite Image (Nano Banana 2 Lite)",
+    provider: "Google Gemini",
+    type: "image",
+    description: "Lightweight low-latency image generation model.",
+    strengths: "Low overhead image creation for rapid previews",
+  } as ModelDefinition,
+
+  GEMINI_25_FLASH_IMAGE: {
+    id: "gemini-2.5-flash-image",
+    name: "Gemini 2.5 Flash Image (Nano Banana)",
+    provider: "Google Gemini",
+    type: "image",
+    description: "Stable Gemini 2.5 Flash multimodal image model.",
+    strengths: "Reliable comic panel illustration and consistent framing",
+  } as ModelDefinition,
+
+  // Hugging Face Models (Verified Live on HF Inference & Spaces)
   HUGGINGFACE_FLUX_SCHNELL: {
     id: "black-forest-labs/FLUX.1-schnell",
-    name: "FLUX.1-schnell (Hugging Face SDK)",
+    name: "FLUX.1-schnell (Black Forest Labs)",
     provider: "Hugging Face",
     type: "image",
-    description: "Ultra-fast state-of-the-art open image generation model hosted on Hugging Face Inference API.",
-    strengths: "Sub-second panel generation speed, clean comic outlines",
+    description: "Ultra-fast state-of-the-art open image generation model on Hugging Face Inference & ZeroGPU.",
+    strengths: "Fast panel generation speed, clean comic outlines",
     isPrimary: true,
   } as ModelDefinition,
 
   HUGGINGFACE_FLUX_DEV: {
     id: "black-forest-labs/FLUX.1-dev",
-    name: "FLUX.1-dev (Hugging Face SDK)",
+    name: "FLUX.1-dev (Black Forest Labs)",
     provider: "Hugging Face",
     type: "image",
-    description: "Widely considered the highest-quality open-weight model available with superior text-in-image rendering.",
+    description: "High-detail 12B open-weight model with strong prompt adherence.",
     strengths: "Exceptional visual detail, speech bubble text rendering, high consistency",
-    isPrimary: false,
-  } as ModelDefinition,
-
-  HUGGINGFACE_SDXL_LIGHTNING: {
-    id: "ByteDance/SDXL-Lightning",
-    name: "SDXL-Lightning (ByteDance)",
-    provider: "Hugging Face",
-    type: "image",
-    description: "Lightning-fast multi-step model capable of generating high-quality images in just a few steps.",
-    strengths: "Rapid panel iterations without waiting, high production throughput",
-    isPrimary: false,
-  } as ModelDefinition,
-
-  HUGGINGFACE_PIXEL_ART_XL: {
-    id: "nerijs/pixel-art-xl",
-    name: "Pixel Art XL (Nerijs)",
-    provider: "Hugging Face",
-    type: "image",
-    description: "Specialized model for creating webcomics with a retro, video-game 16-bit pixel art visual style.",
-    strengths: "Retro video game webcomics, pixel art aesthetic, nostalgic 80s/90s feel",
-    isPrimary: false,
   } as ModelDefinition,
 
   HUGGINGFACE_SD_35_LARGE: {
@@ -75,95 +101,62 @@ export const IMAGE_MODELS = {
     type: "image",
     description: "Advanced Stability AI model for versatile graphic novel and concept art rendering.",
     strengths: "Complex prompt adhesion, rich color depth, versatile art styles",
-    isPrimary: false,
   } as ModelDefinition,
 
-  HUGGINGFACE_MAGE_FLOW_TURBO: {
-    id: "microsoft/Mage-Flow-Turbo",
-    name: "Mage-Flow-Turbo (Microsoft)",
+  HUGGINGFACE_SD_35_TURBO: {
+    id: "stabilityai/stable-diffusion-3.5-large-turbo",
+    name: "Stable Diffusion 3.5 Large Turbo",
     provider: "Hugging Face",
     type: "image",
-    description: "Ultra-efficient 4B parameter model updated for rapid generation.",
-    strengths: "Lightning fast execution, clean lines, high efficiency",
-    isPrimary: false,
+    description: "Distilled high-speed version of Stable Diffusion 3.5 Large.",
+    strengths: "4-step fast generation with rich graphic novel shading",
   } as ModelDefinition,
 
-  HUGGINGFACE_KREA_2_TURBO: {
-    id: "krea/Krea-2-Turbo",
-    name: "Krea-2-Turbo (Krea)",
+  HUGGINGFACE_SDXL_LIGHTNING: {
+    id: "ByteDance/SDXL-Lightning",
+    name: "SDXL-Lightning (ByteDance)",
     provider: "Hugging Face",
     type: "image",
-    description: "Massive 13B parameter model built for highly responsive and high-fidelity output generations.",
-    strengths: "Rich detail, highly responsive, fine textures",
-    isPrimary: false,
+    description: "Lightning-fast multi-step SDXL model.",
+    strengths: "Rapid panel iterations, high production throughput",
   } as ModelDefinition,
 
-  HUGGINGFACE_FREPIK_F_LITE_TEXTURE: {
-    id: "Freepik/F-Lite-Texture",
-    name: "Freepik / F-Lite-Texture (10B)",
+  HUGGINGFACE_SDXL_BASE: {
+    id: "stabilityai/stable-diffusion-xl-base-1.0",
+    name: "Stable Diffusion XL 1.0",
     provider: "Hugging Face",
     type: "image",
-    description: "10B parameter copyright-safe open diffusion model by Freepik & Fal.ai trained on 80M+ legally compliant SFW images, optimized for rich graphic textures and surface details.",
-    strengths: "100% copyright-safe commercial use, 10B parameters, hyper-detailed material & surface texture depth",
-    isPrimary: false,
+    description: "Foundational SDXL 1.0 model for classic comic illustration.",
+    strengths: "Broad artistic style support and balanced composition",
   } as ModelDefinition,
 
-  HUGGINGFACE_OPENJOURNEY_V4: {
-    id: "prompthero/openjourney-v4",
-    name: "OpenJourney v4 (PromptHero)",
-    provider: "Hugging Face",
-    type: "image",
-    description: "Fine-tuned Stable Diffusion alternative defaulting natively to a highly artistic, cinematic graphic novel aesthetic.",
-    strengths: "Cinematic lighting, dramatic graphic novel art, rich shadows",
-    isPrimary: false,
-  } as ModelDefinition,
-
-  // Google Imagen / Gemini Image Models
-  IMAGEN_3: {
-    id: "imagen-3.0-generate-002",
-    name: "Imagen 3.0",
-    provider: "Google Gemini",
-    type: "image",
-    description: "Google's flagship text-to-image generation model with high visual fidelity.",
-    strengths: "Photorealistic lighting, deep semantic accuracy, vibrant comic shading",
-    isPrimary: true,
-  } as ModelDefinition,
-
-  GEMINI_31_FLASH_IMAGE: {
-    id: "gemini-3.1-flash-image",
-    name: "Gemini 3.1 Flash Image",
-    provider: "Google Gemini",
-    type: "image",
-    description: "Fast multimodal image generation model from Google.",
-    strengths: "High-speed multimodal generation with character likeness preservation",
-  } as ModelDefinition,
-
-  GEMINI_31_FLASH_LITE_IMAGE: {
-    id: "gemini-3.1-flash-lite-image",
-    name: "Gemini 3.1 Flash Lite Image",
-    provider: "Google Gemini",
-    type: "image",
-    description: "Lightweight fast image generation model.",
-    strengths: "Low overhead image creation for rapid previews",
-  } as ModelDefinition,
-
-  GEMINI_3_PRO_IMAGE: {
-    id: "gemini-3-pro-image",
-    name: "Gemini 3 Pro Image",
-    provider: "Google Gemini",
-    type: "image",
-    description: "Pro-tier high quality image generation model.",
-    strengths: "Maximum detail resolution, cinematic panel layout composition",
-  } as ModelDefinition,
-
-  // Pollinations FLUX Model
+  // Pollinations Models
   POLLINATIONS_FLUX: {
-    id: "pollinations-flux",
+    id: "flux",
     name: "Pollinations FLUX",
     provider: "Pollinations AI",
     type: "image",
-    description: "FLUX illustration model provided via Pollinations AI endpoint.",
-    strengths: "Unrestricted open generation, vibrant comic illustration styles",
+    description: "Default FLUX illustration model provided via Pollinations AI endpoint.",
+    strengths: "Open generation, vibrant comic illustration styles",
+    isPrimary: true,
+  } as ModelDefinition,
+
+  POLLINATIONS_SANA: {
+    id: "sana",
+    name: "Pollinations Sana",
+    provider: "Pollinations AI",
+    type: "image",
+    description: "Fast linear-diffusion model hosted on Pollinations AI.",
+    strengths: "Rapid high-resolution synthesis",
+  } as ModelDefinition,
+
+  POLLINATIONS_TURBO: {
+    id: "turbo",
+    name: "Pollinations Turbo",
+    provider: "Pollinations AI",
+    type: "image",
+    description: "High-speed turbo diffusion model on Pollinations AI.",
+    strengths: "Quick draft comic panels",
   } as ModelDefinition,
 };
 
@@ -171,6 +164,24 @@ export const IMAGE_MODELS = {
  * All Text Reasoning & Multimodal Vision Models accessed across the application
  */
 export const TEXT_AND_VISION_MODELS = {
+  GEMINI_38_FLASH: {
+    id: "gemini-3.8-flash",
+    name: "Gemini 3.8 Flash",
+    provider: "Google Gemini",
+    type: "multimodal",
+    description: "Newest Gemini 3.8 Flash multimodal model for story decomposition and vision analysis.",
+    strengths: "Fastest next-gen multimodal reasoning and JSON storyboard accuracy",
+  } as ModelDefinition,
+
+  GEMINI_37_FLASH: {
+    id: "gemini-3.7-flash",
+    name: "Gemini 3.7 Flash",
+    provider: "Google Gemini",
+    type: "multimodal",
+    description: "High-accuracy multimodal Flash model for character likeness and storyboards.",
+    strengths: "Strong multilingual story writing and structured output",
+  } as ModelDefinition,
+
   GEMINI_36_FLASH: {
     id: "gemini-3.6-flash",
     name: "Gemini 3.6 Flash",
@@ -185,27 +196,18 @@ export const TEXT_AND_VISION_MODELS = {
     id: "gemini-3.5-flash",
     name: "Gemini 3.5 Flash",
     provider: "Google Gemini",
-    type: "text",
-    description: "High speed translation model for translating Hebrew scene descriptions to English image prompts.",
-    strengths: "Sub-second Hebrew/French to English translation",
+    type: "multimodal",
+    description: "High-speed translation and storyboard model.",
+    strengths: "Sub-second Hebrew/French/Spanish/German to English translation",
   } as ModelDefinition,
 
-  GEMINI_FLASH_LATEST: {
-    id: "gemini-flash-latest",
-    name: "Gemini Flash Latest",
+  GEMINI_31_PRO: {
+    id: "gemini-3.1-pro-preview",
+    name: "Gemini 3.1 Pro",
     provider: "Google Gemini",
     type: "multimodal",
-    description: "Backup latest flash reasoning model for story layout & decomposition.",
-    strengths: "High throughput fallback story intelligence",
-  } as ModelDefinition,
-
-  GEMINI_31_FLASH_LITE: {
-    id: "gemini-3.1-flash-lite",
-    name: "Gemini 3.1 Flash Lite",
-    provider: "Google Gemini",
-    type: "multimodal",
-    description: "Lightweight fallback reasoning model for background decomposition tasks.",
-    strengths: "Low token footprint reasoning",
+    description: "Deep reasoning Pro model for complex narratives.",
+    strengths: "Rich literary storytelling and nuanced character arcs",
   } as ModelDefinition,
 };
 
@@ -213,24 +215,25 @@ export const TEXT_AND_VISION_MODELS = {
  * Complete Catalogue of All Accessed Models in the Application
  */
 export const ALL_ACCESSED_MODELS: ModelDefinition[] = [
+  IMAGE_MODELS.GEMINI_31_FLASH_IMAGE,
+  IMAGE_MODELS.GEMINI_NANO_BANANA_21,
+  IMAGE_MODELS.GEMINI_3_PRO_IMAGE,
+  IMAGE_MODELS.GEMINI_31_FLASH_LITE_IMAGE,
+  IMAGE_MODELS.GEMINI_25_FLASH_IMAGE,
   IMAGE_MODELS.HUGGINGFACE_FLUX_SCHNELL,
   IMAGE_MODELS.HUGGINGFACE_FLUX_DEV,
-  IMAGE_MODELS.HUGGINGFACE_SDXL_LIGHTNING,
-  IMAGE_MODELS.HUGGINGFACE_PIXEL_ART_XL,
   IMAGE_MODELS.HUGGINGFACE_SD_35_LARGE,
-  IMAGE_MODELS.HUGGINGFACE_MAGE_FLOW_TURBO,
-  IMAGE_MODELS.HUGGINGFACE_KREA_2_TURBO,
-  IMAGE_MODELS.HUGGINGFACE_FREPIK_F_LITE_TEXTURE,
-  IMAGE_MODELS.HUGGINGFACE_OPENJOURNEY_V4,
-  IMAGE_MODELS.IMAGEN_3,
-  IMAGE_MODELS.GEMINI_31_FLASH_IMAGE,
-  IMAGE_MODELS.GEMINI_31_FLASH_LITE_IMAGE,
-  IMAGE_MODELS.GEMINI_3_PRO_IMAGE,
+  IMAGE_MODELS.HUGGINGFACE_SD_35_TURBO,
+  IMAGE_MODELS.HUGGINGFACE_SDXL_LIGHTNING,
+  IMAGE_MODELS.HUGGINGFACE_SDXL_BASE,
   IMAGE_MODELS.POLLINATIONS_FLUX,
+  IMAGE_MODELS.POLLINATIONS_SANA,
+  IMAGE_MODELS.POLLINATIONS_TURBO,
+  TEXT_AND_VISION_MODELS.GEMINI_38_FLASH,
+  TEXT_AND_VISION_MODELS.GEMINI_37_FLASH,
   TEXT_AND_VISION_MODELS.GEMINI_36_FLASH,
   TEXT_AND_VISION_MODELS.GEMINI_35_FLASH,
-  TEXT_AND_VISION_MODELS.GEMINI_FLASH_LATEST,
-  TEXT_AND_VISION_MODELS.GEMINI_31_FLASH_LITE,
+  TEXT_AND_VISION_MODELS.GEMINI_31_PRO,
 ];
 
 export const ALL_MODELS = ALL_ACCESSED_MODELS;
@@ -240,36 +243,38 @@ export const ALL_MODELS = ALL_ACCESSED_MODELS;
  */
 export const IMAGE_ENGINES_CONFIG: ModelEngineConfig[] = [
   {
+    id: "gemini",
+    label: "Google Gemini Image (Nano Banana)",
+    provider: "Google Gemini",
+    models: [
+      IMAGE_MODELS.GEMINI_31_FLASH_IMAGE,
+      IMAGE_MODELS.GEMINI_NANO_BANANA_21,
+      IMAGE_MODELS.GEMINI_3_PRO_IMAGE,
+      IMAGE_MODELS.GEMINI_31_FLASH_LITE_IMAGE,
+      IMAGE_MODELS.GEMINI_25_FLASH_IMAGE,
+    ],
+  },
+  {
     id: "huggingface",
     label: "Hugging Face Models",
     provider: "Hugging Face",
     models: [
       IMAGE_MODELS.HUGGINGFACE_FLUX_SCHNELL,
       IMAGE_MODELS.HUGGINGFACE_FLUX_DEV,
-      IMAGE_MODELS.HUGGINGFACE_SDXL_LIGHTNING,
-      IMAGE_MODELS.HUGGINGFACE_PIXEL_ART_XL,
       IMAGE_MODELS.HUGGINGFACE_SD_35_LARGE,
-      IMAGE_MODELS.HUGGINGFACE_MAGE_FLOW_TURBO,
-      IMAGE_MODELS.HUGGINGFACE_KREA_2_TURBO,
-      IMAGE_MODELS.HUGGINGFACE_FREPIK_F_LITE_TEXTURE,
-      IMAGE_MODELS.HUGGINGFACE_OPENJOURNEY_V4,
-    ],
-  },
-  {
-    id: "gemini",
-    label: "Google Imagen 3 / Gemini",
-    provider: "Google Gemini",
-    models: [
-      IMAGE_MODELS.IMAGEN_3,
-      IMAGE_MODELS.GEMINI_31_FLASH_IMAGE,
-      IMAGE_MODELS.GEMINI_31_FLASH_LITE_IMAGE,
-      IMAGE_MODELS.GEMINI_3_PRO_IMAGE,
+      IMAGE_MODELS.HUGGINGFACE_SD_35_TURBO,
+      IMAGE_MODELS.HUGGINGFACE_SDXL_LIGHTNING,
+      IMAGE_MODELS.HUGGINGFACE_SDXL_BASE,
     ],
   },
   {
     id: "pollinations",
-    label: "Pollinations FLUX",
+    label: "Pollinations AI",
     provider: "Pollinations AI",
-    models: [IMAGE_MODELS.POLLINATIONS_FLUX],
+    models: [
+      IMAGE_MODELS.POLLINATIONS_FLUX,
+      IMAGE_MODELS.POLLINATIONS_SANA,
+      IMAGE_MODELS.POLLINATIONS_TURBO,
+    ],
   },
 ];

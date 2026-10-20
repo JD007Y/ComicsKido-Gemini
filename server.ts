@@ -20,13 +20,43 @@ const PORT = 3000;
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
-// Initialize the Gemini API client safely on the server side
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY,
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
+// Initialize the Gemini API client safely on the server side (hot-reloading GEMINI_API_KEY from .env when updated)
+function getLatestGeminiKey(): string {
+  try {
+    const envPath = path.join(process.cwd(), ".env");
+    if (fs.existsSync(envPath)) {
+      const envContent = fs.readFileSync(envPath, "utf8");
+      const match = envContent.match(/^GEMINI_API_KEY=["']?([^"'\r\n]+)["']?/m);
+      if (match && match[1]) {
+        const key = match[1].trim();
+        if (key && !key.toLowerCase().includes("your_gemini")) {
+          process.env.GEMINI_API_KEY = key;
+          return key;
+        }
+      }
     }
+  } catch (_) {}
+  return (process.env.GEMINI_API_KEY || "").trim();
+}
+
+let cachedGeminiKey = "";
+let cachedAiClient: GoogleGenAI | null = null;
+const ai: GoogleGenAI = new Proxy({} as GoogleGenAI, {
+  get(_target, prop) {
+    const currentKey = getLatestGeminiKey();
+    if (!cachedAiClient || cachedGeminiKey !== currentKey) {
+      cachedGeminiKey = currentKey;
+      cachedAiClient = new GoogleGenAI({
+        apiKey: currentKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          }
+        }
+      });
+    }
+    const val = (cachedAiClient as any)[prop];
+    return typeof val === "function" ? val.bind(cachedAiClient) : val;
   }
 });
 
@@ -61,7 +91,22 @@ function buildPollinationsUrl(prompt: string, aspectRatio: "1:1" | "16:9" = "1:1
   return `https://image.pollinations.ai/prompt/${encodeURIComponent(enhancedPrompt)}?width=${width}&height=${height}&nologo=true&seed=${seed}&model=${encodeURIComponent(apiModel)}&enhance=true`;
 }
 
+let pollinationsRequestQueue: Promise<any> = Promise.resolve();
+
 async function generateWithPollinations(
+  prompt: string,
+  aspectRatio: "1:1" | "16:9" = "1:1",
+  subModel: string = "flux",
+  logCategory: 'AVATAR_GEN' | 'PANEL_GEN' = 'AVATAR_GEN'
+): Promise<ImageGenResult> {
+  const currentTask = pollinationsRequestQueue.then(async () => {
+    return _execGenerateWithPollinations(prompt, aspectRatio, subModel, logCategory);
+  });
+  pollinationsRequestQueue = currentTask.then(() => {}, () => {});
+  return currentTask;
+}
+
+async function _execGenerateWithPollinations(
   prompt: string,
   aspectRatio: "1:1" | "16:9" = "1:1",
   subModel: string = "flux",
@@ -88,7 +133,7 @@ async function generateWithPollinations(
   });
 
   let lastErr = "Unknown Pollinations error";
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  for (let attempt = 1; attempt <= 4; attempt++) {
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 90000);
@@ -103,10 +148,20 @@ async function generateWithPollinations(
       clearTimeout(timeout);
 
       if (!response.ok) {
+        const errBody = await response.text().catch(() => "");
         lastErr = `HTTP ${response.status} ${response.statusText}`;
-        console.warn(`[Pollinations] Attempt ${attempt}/3 failed: ${lastErr}`);
-        // Rate limits need a longer cool-down
-        await sleep(response.status === 429 ? 4000 * attempt : 1000 * attempt);
+        let waitMs = response.status === 429 || response.status === 402 ? 12000 : 2000 * attempt;
+
+        // Pollinations free tier returns 402 with JSON {"error":{"message":"...Retry after Xs..."}}
+        const retryMatch = errBody.match(/Retry after\s+(\d+)\s*s/i);
+        if (retryMatch && retryMatch[1]) {
+          const retrySec = Math.min(48, Math.max(3, parseInt(retryMatch[1], 10) + 2));
+          waitMs = retrySec * 1000;
+          lastErr = `Pollinations rate cooldown (${retrySec}s)`;
+        }
+
+        console.warn(`[Pollinations] Attempt ${attempt}/4 status ${response.status}. Waiting ${Math.round(waitMs / 1000)}s before retry...`);
+        await sleep(waitMs);
         continue;
       }
 
@@ -114,16 +169,16 @@ async function generateWithPollinations(
       const buffer = Buffer.from(await response.arrayBuffer());
       if (!buffer.length) {
         lastErr = "Empty image payload from Pollinations";
-        console.warn(`[Pollinations] Attempt ${attempt}/3 failed: ${lastErr}`);
-        await sleep(1000 * attempt);
+        console.warn(`[Pollinations] Attempt ${attempt}/4 failed: ${lastErr}`);
+        await sleep(1500 * attempt);
         continue;
       }
 
       // Reject HTML error pages masquerading as success
       if (contentType.includes("text/html") || buffer.slice(0, 15).toString("utf8").includes("<!DOCTYPE")) {
         lastErr = "Pollinations returned HTML instead of an image";
-        console.warn(`[Pollinations] Attempt ${attempt}/3 failed: ${lastErr}`);
-        await sleep(1500 * attempt);
+        console.warn(`[Pollinations] Attempt ${attempt}/4 failed: ${lastErr}`);
+        await sleep(2000 * attempt);
         continue;
       }
 
@@ -138,8 +193,8 @@ async function generateWithPollinations(
       };
     } catch (e: any) {
       lastErr = e?.name === "AbortError" ? "Timed out waiting for Pollinations image" : (e?.message || String(e));
-      console.warn(`[Pollinations] Attempt ${attempt}/3 failed: ${lastErr}`);
-      await sleep(1000 * attempt);
+      console.warn(`[Pollinations] Attempt ${attempt}/4 failed: ${lastErr}`);
+      await sleep(1500 * attempt);
     }
   }
 
@@ -159,29 +214,13 @@ function getLatestHfToken(): string {
           const k = key.trim();
           if (k === 'HUGGING_FACE_TOKEN' || k === 'Hugging_face_Token' || k === 'HF_TOKEN') {
             const val = valParts.join('=').trim().replace(/^["']|["']$/g, '');
-            if (val) return val;
-          }
-        }
-      }
-    }
-    const dotenvExamplePath = path.join(process.cwd(), '.env.example');
-    if (fs.existsSync(dotenvExamplePath)) {
-      const content = fs.readFileSync(dotenvExamplePath, 'utf8');
-      for (const line of content.split('\n')) {
-        const trimmed = line.trim();
-        if (trimmed.startsWith('#')) continue;
-        if (trimmed.includes('=')) {
-          const [key, ...valParts] = trimmed.split('=');
-          const k = key.trim();
-          if (k === 'HUGGING_FACE_TOKEN' || k === 'Hugging_face_Token' || k === 'HF_TOKEN') {
-            const val = valParts.join('=').trim().replace(/^["']|["']$/g, '');
-            if (val) return val;
+            if (val && !val.startsWith('your_')) return val;
           }
         }
       }
     }
   } catch (e) {
-    console.warn('[getLatestHfToken] Error reading .env files:', e);
+    console.warn('[getLatestHfToken] Error reading .env file:', e);
   }
 
   return (
@@ -233,11 +272,9 @@ async function _execGenerateWithHuggingFace(
       "black-forest-labs/FLUX.1-schnell",
       "black-forest-labs/FLUX.1-dev",
       "stabilityai/stable-diffusion-3.5-large",
-      "nerijs/pixel-art-xl",
-      "prompthero/openjourney-v4",
+      "stabilityai/stable-diffusion-3.5-large-turbo",
       "ByteDance/SDXL-Lightning",
-      "microsoft/Mage-Flow-Turbo",
-      "krea/Krea-2-Turbo"
+      "stabilityai/stable-diffusion-xl-base-1.0"
     ];
     hfModels = [requestedModel, ...defaultList.filter(m => m !== requestedModel)];
   } else {
@@ -255,15 +292,8 @@ async function _execGenerateWithHuggingFace(
   const hf = new HfInference(rawToken);
 
   for (const model of hfModels) {
-    const isFLiteTexture = model === "Freepik/F-Lite-Texture";
-    const currentInputs = isFLiteTexture 
-      ? `${prompt}, detailed graphic texture, high fidelity illustration, comic panel texture backdrop, intricate surface depth` 
-      : fullPrompt;
-    
+    const currentInputs = fullPrompt;
     const hfParams: any = { wait_for_model: true };
-    if (isFLiteTexture) {
-      hfParams.negative_prompt = "flat vector, clean digital art, smooth gradient, text, blurry, low resolution";
-    }
 
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
@@ -303,9 +333,9 @@ async function _execGenerateWithHuggingFace(
         lastErrMessage = `[HF SDK Error] ${model}: ${errMsg}`;
         console.log(`[HF Notice] ${lastErrMessage}`);
         
-        if (err?.status === 401 || errLower.includes('401')) {
+        if (err?.status === 401 || errLower.includes('401') || errLower.includes('invalid username or password') || errLower.includes('unauthorized')) {
           console.log(`[HF 401 Unauthorized] Token (${tokenPreview}) was rejected by Hugging Face.`);
-          break;
+          throw new Error("Hugging Face token in .env is invalid or expired (401 Unauthorized). Please update HUGGING_FACE_TOKEN in .env or switch Image Engine in AI Settings.");
         }
 
         if (err?.status === 429 || errLower.includes('429') || errLower.includes('too many requests') || errLower.includes('rate limit')) {
@@ -327,69 +357,61 @@ async function _execGenerateWithHuggingFace(
     if (isCreditDepleted) break;
   }
 
-  if (isCreditDepleted) {
-    throw new Error("Hugging Face API account credits depleted. Please check your Hugging Face token or select another engine.");
-  }
+  // Strategy 2: Official Hugging Face ZeroGPU Space (black-forest-labs/FLUX.1-schnell) using the user's HF token
+  // Activated when monthly Serverless Inference Router credits ($0.10 free tier) are depleted
+  try {
+    console.log(`[HF Space] Trying official Hugging Face FLUX.1-schnell ZeroGPU Space with user token (${tokenPreview})...`);
+    const width = aspectRatio === "16:9" ? 1024 : 768;
+    const height = aspectRatio === "16:9" ? 576 : 768;
+    const callRes = await fetch("https://black-forest-labs-flux-1-schnell.hf.space/gradio_api/call/infer", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${rawToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        data: [fullPrompt, 0, true, width, height, 4]
+      })
+    });
 
-  // Strategy 2: Direct POST request to legacy Serverless Inference endpoint
-  for (const model of hfModels) {
-    const isFLiteTexture = model === "Freepik/F-Lite-Texture";
-    const currentInputs = isFLiteTexture 
-      ? `${prompt}, detailed graphic texture, high fidelity illustration, comic panel texture backdrop, intricate surface depth` 
-      : fullPrompt;
-    
-    const requestBody: any = {
-      inputs: currentInputs,
-      options: { wait_for_model: true }
-    };
-    if (isFLiteTexture) {
-      requestBody.parameters = {
-        negative_prompt: "flat vector, clean digital art, smooth gradient, text, blurry, low resolution"
-      };
-    }
-
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      try {
-        console.log(`[HF Direct Fetch] Trying direct inference endpoint for model: ${model} (Attempt ${attempt}/2)...`);
-        const res = await fetch(`https://api-inference.huggingface.co/models/${model}`, {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${rawToken}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify(requestBody)
+    if (callRes.ok) {
+      const callData: any = await callRes.json();
+      if (callData?.event_id) {
+        const sseRes = await fetch(`https://black-forest-labs-flux-1-schnell.hf.space/gradio_api/call/infer/${callData.event_id}`, {
+          headers: { "Authorization": `Bearer ${rawToken}` }
         });
-
-        if (res.ok) {
-          const arrayBuffer = await res.arrayBuffer();
-          const buffer = Buffer.from(arrayBuffer);
-          const mime = res.headers.get('content-type') || 'image/png';
-          if (!mime.includes('json') && buffer.length > 500) {
-            const base64 = buffer.toString('base64');
-            console.log(`[HF Direct Fetch SUCCESS] Model: ${model} | Size: ${buffer.length} bytes`);
-            return {
-              imageUrl: `data:${mime};base64,${base64}`,
-              modelUsed: `hf-direct-${model}`
-            };
-          }
-        } else {
-          const errTxt = await res.text().catch(() => '');
-          lastErrMessage = `[HF Direct HTTP ${res.status}] ${model}: ${errTxt.substring(0, 150)}`;
-          console.log(`[HF Notice] ${lastErrMessage}`);
-          if (errTxt.toLowerCase().includes('depleted your monthly included credits')) {
-            throw new Error("Hugging Face API account credits depleted.");
-          }
-          if (res.status === 429 || res.status === 503) {
-            await new Promise(r => setTimeout(r, 3500));
-            continue;
+        if (sseRes.ok) {
+          const sseText = await sseRes.text();
+          const dataLine = sseText.split("\n").find(line => line.startsWith("data: "));
+          if (dataLine) {
+            const parsed = JSON.parse(dataLine.slice(6));
+            const imageFileUrl = parsed?.[0]?.url;
+            if (imageFileUrl) {
+              const imgRes = await fetch(imageFileUrl, {
+                headers: { "Authorization": `Bearer ${rawToken}` }
+              });
+              if (imgRes.ok) {
+                const imgBuf = Buffer.from(await imgRes.arrayBuffer());
+                if (imgBuf.length > 500) {
+                  const mime = imgRes.headers.get("content-type") || "image/webp";
+                  console.log(`[HF Space SUCCESS] FLUX.1-schnell ZeroGPU | Size: ${imgBuf.length} bytes`);
+                  return {
+                    imageUrl: `data:${mime};base64,${imgBuf.toString("base64")}`,
+                    modelUsed: "hf-space-black-forest-labs/FLUX.1-schnell"
+                  };
+                }
+              }
+            }
           }
         }
-      } catch (e: any) {
-        lastErrMessage = `[HF Direct Exception] ${model}: ${e?.message || e}`;
-        console.log(`[HF Notice] ${lastErrMessage}`);
-        if (e?.message?.includes('credits depleted')) throw e;
       }
     }
+  } catch (spaceErr: any) {
+    console.warn(`[HF Space] ZeroGPU fallback failed:`, spaceErr?.message || spaceErr);
+  }
+
+  if (isCreditDepleted) {
+    throw new Error("Hugging Face API account credits depleted. Please check your Hugging Face token or select another engine.");
   }
 
   throw new Error(`Hugging Face generation unavailable: ${lastErrMessage}`);
@@ -549,7 +571,7 @@ function recordModelUsage(
 async function generateTextWithHuggingFace(
   userPrompt: string,
   systemPrompt: string = "You are an AI Comic Book Prompt Engineer and Writer. Expand and refine creative text into vivid, highly detailed descriptions for comic artwork.",
-  requestedModel: string = "google/gemma-3-4b-it",
+  requestedModel: string = "Qwen/Qwen2.5-72B-Instruct",
   maxTokens: number = 1800
 ): Promise<{ text: string; modelUsed: string }> {
   const token = getLatestHfToken();
@@ -560,9 +582,12 @@ async function generateTextWithHuggingFace(
   const hf = new HfInference(token);
   const modelsToTry = [
     requestedModel,
-    "google/gemma-3-4b-it",
+    "Qwen/Qwen2.5-72B-Instruct",
+    "meta-llama/Llama-3.3-70B-Instruct",
+    "Qwen/Qwen2.5-7B-Instruct",
     "meta-llama/Llama-3.2-3B-Instruct",
-    "Qwen/Qwen2.5-7B-Instruct"
+    "google/gemma-3-27b-it",
+    "google/gemma-3-4b-it"
   ];
 
   const uniqueModels = Array.from(new Set(modelsToTry.filter(Boolean)));
@@ -591,6 +616,7 @@ async function generateTextWithHuggingFace(
         }
       } catch (chatErr: any) {
         console.warn(`[Server HF LLM] chatCompletion on ${modelId} failed:`, chatErr?.message || chatErr);
+        lastErr = chatErr;
       }
 
       // Attempt 2: Text Generation SDK API
@@ -616,39 +642,7 @@ async function generateTextWithHuggingFace(
         }
       } catch (genErr: any) {
         console.warn(`[Server HF LLM] textGeneration SDK on ${modelId} failed:`, genErr?.message || genErr);
-      }
-
-      // Attempt 3: Direct HTTP fetch to Serverless Inference API
-      const directUrl = `https://api-inference.huggingface.co/models/${modelId}`;
-      const response = await fetch(directUrl, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          inputs: `${systemPrompt}\n\nUser Idea: ${userPrompt}\n\nResponse:`,
-          parameters: { max_new_tokens: maxTokens, temperature: 0.7, return_full_text: false },
-          options: { wait_for_model: true }
-        })
-      });
-
-      if (response.ok) {
-        const data: any = await response.json();
-        let extractedText = "";
-        if (Array.isArray(data) && data[0]?.generated_text) {
-          extractedText = data[0].generated_text;
-        } else if (data?.generated_text) {
-          extractedText = data.generated_text;
-        }
-
-        if (extractedText && extractedText.trim()) {
-          console.log(`[Server HF LLM] SUCCESS with ${modelId} via direct fetch`);
-          return { text: extractedText.trim(), modelUsed: modelId };
-        }
-      } else {
-        const errText = await response.text();
-        console.warn(`[Server HF LLM] Direct fetch ${modelId} returned HTTP ${response.status}:`, errText);
+        lastErr = genErr;
       }
     } catch (err: any) {
       console.warn(`[Server HF LLM] ${modelId} overall attempt failed:`, err?.message || err);
@@ -713,14 +707,15 @@ async function generateImageWithFallback(
     return await generateWithPollinations(prompt, aspectRatio, selectedModel, pollinationsLogCategory);
   }
 
-  // Google Gemini Image Generation Models
+  // Google Gemini Image Generation Models (Verified Live in v1beta)
   const primaryModel = geminiSubModel || "gemini-3.1-flash-image";
   const models = allowAutoFallback
     ? Array.from(new Set([
         primaryModel,
         "gemini-3.1-flash-image",
-        "gemini-3.1-flash-lite-image",
+        "gemini-nano-banana-2.1",
         "gemini-3-pro-image",
+        "gemini-3.1-flash-lite-image",
         "gemini-2.5-flash-image"
       ]))
     : [primaryModel];
@@ -730,7 +725,7 @@ async function generateImageWithFallback(
   let retrySeconds = "5";
 
   for (const model of models) {
-    const isPureImageModel = model.includes("-image");
+    const isPureImageModel = model.includes("-image") || model.includes("banana");
     const config: any = isPureImageModel ? { imageConfig: { aspectRatio } } : {};
 
     for (let attempt = 1; attempt <= 2; attempt++) {
@@ -763,12 +758,13 @@ async function generateImageWithFallback(
         const is429 = errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.toLowerCase().includes('quota') || errMsg.toLowerCase().includes('rate limit');
         if (is429) {
           isRateLimited = true;
+          const isZeroQuotaBilling = errMsg.includes('limit: 0') || errMsg.toLowerCase().includes('billing details');
           const retryMatch = errMsg.match(/retry in\s+([\d\.]+)s/i);
           if (retryMatch && retryMatch[1]) {
             retrySeconds = Math.ceil(parseFloat(retryMatch[1])).toString();
           }
 
-          if (attempt === 1) {
+          if (attempt === 1 && !isZeroQuotaBilling) {
             const pauseMs = retryMatch && retryMatch[1] ? Math.min(8000, Math.ceil(parseFloat(retryMatch[1]) * 1000)) : 4500;
             console.log(`[Server Image Gen] 429 rate limit detected on ${model}. Pausing ${pauseMs}ms before retry...`);
             await new Promise(r => setTimeout(r, pauseMs));
@@ -781,7 +777,7 @@ async function generateImageWithFallback(
   }
 
   // If Gemini models hit rate limits or failed, and AutoFallback is ON, try Hugging Face FLUX.1-schnell as secondary engine
-  if (allowAutoFallback && process.env.HUGGINGFACE_TOKEN) {
+  if (allowAutoFallback && getLatestHfToken()) {
     try {
       console.log(`[Server Image Gen] Gemini rate-limited. AutoFallback active: Attempting Hugging Face FLUX.1-schnell fallback...`);
       return await generateWithHuggingFace(prompt, aspectRatio, "black-forest-labs/FLUX.1-schnell", true);
@@ -798,7 +794,7 @@ async function generateImageWithFallback(
       details: `Quota limit reached on Gemini image model '${primaryModel}'. Google requested cooldown: ~${retrySeconds}s.`,
       model: primaryModel
     });
-    throw new Error(`Google Gemini API image rate limit reached (Quota Exceeded) for model '${primaryModel}'. Please wait ~${retrySeconds} seconds before generating again, or switch Image Engine/Model in top toolbar.`);
+    throw new Error(`Google Gemini API image rate limit reached (Quota Exceeded) for model '${primaryModel}'. Please wait ~${retrySeconds} seconds or switch the Image Engine in AI Settings.`);
   }
 
   throw new Error(`Gemini image generation for model '${primaryModel}' failed: ${lastError?.message || 'Quota limit or model unavailable'}`);
@@ -935,7 +931,7 @@ app.post("/api/gemini/translate-to-english-if-needed", async (req, res) => {
 
   try {
     const response = await withRetry(async () => {
-      const models = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro"];
+      const models = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.7-flash", "gemini-3.8-flash", "gemini-3.5-flash-lite"];
       let lastErr: any;
       for (const model of models) {
         try {
@@ -997,7 +993,7 @@ app.post("/api/gemini/describe-photo-likeness", async (req, res) => {
         throw new Error("No usable photo URL provided for likeness analysis");
       }
 
-      const models = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro"];
+      const models = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.7-flash", "gemini-3.8-flash", "gemini-3.5-flash-lite"];
       let lastErr: any;
       for (const model of models) {
         try {
@@ -1178,7 +1174,7 @@ Output ONLY a JSON object matching this schema:
         }
       }
 
-      const defaultGeminiModels = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-1.5-flash", "gemini-1.5-pro"];
+      const defaultGeminiModels = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.7-flash", "gemini-3.8-flash", "gemini-3.5-flash-lite"];
       const modelsToTry = storyModel && !storyModel.includes('/')
         ? Array.from(new Set([storyModel, ...defaultGeminiModels]))
         : defaultGeminiModels;
@@ -1465,7 +1461,7 @@ app.post("/api/gemini/generate-panel-image", async (req, res) => {
       const hasHebrew = /[\u0590-\u05FF]/.test(prompt);
       if (hasHebrew) {
         try {
-          const modelsList = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite"];
+          const modelsList = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.7-flash", "gemini-3.8-flash"];
           let transResponse = null;
           for (const model of modelsList) {
             try {
@@ -1491,6 +1487,7 @@ TEXT: "${prompt}"`,
 
       const stylePrompts: Record<string, string> = {
         vibrant: "An extremely detailed, rich modern graphic novel comic panel banner, comic book style, bold black ink cartoon outlines, vibrant and highly saturated professional comic colors, gorgeous cinematic drop-shadows and beautiful key lighting, clean detailed character illustrations, rich sequential comic book artist rendering, child-friendly but highly professional",
+        colorful: "An ultra-bright, joyful neon pop-art children's comic book panel illustration, bursting with rainbow-saturated primary colors, crisp black comic ink outlines, playful sparkles and dynamic expressive characters, high-production storybook art",
         sketched: "A highly detailed and rich hand-drawn graphic novel sketch panel, charcoal and dark pencil shading textures, strong expressive inked outlines, professional hand-drawn classic comic book style, dramatic hand-made hatch marks, exceptionally detailed environment backdrop, high production comic book artwork",
         watercolor: "A stunningly rich, detailed watercolor whimsical storybook comic book panel, ink-wash comic book aesthetic, soft beautiful wet-on-wet watercolor textures, elegant delicate black outlines, magical storytelling atmosphere with deep ambient fog, rich depth of space and highly detailed painted backgrounds",
         noir: "A magnificent dark film noir comic book splash panel, dramatic deep cinematic ink block-shadows, harsh high-contrast chiaroscuro lighting, highly detailed black and white comic book engraving style, crisp vintage drama lines, moody classic crime graphic novel aesthetic",
@@ -1570,7 +1567,7 @@ app.post("/api/gemini/generate-character-image", async (req, res) => {
       const hasHebrew = /[\u0590-\u05FF]/.test(description);
       if (hasHebrew) {
         try {
-          const modelsList = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite"];
+          const modelsList = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.7-flash", "gemini-3.8-flash"];
           let transResponse = null;
           for (const model of modelsList) {
             try {
@@ -1598,6 +1595,7 @@ app.post("/api/gemini/generate-character-image", async (req, res) => {
 
       const stylePrompts: Record<string, string> = {
         vibrant: "Graphic novel style character portrait illustration, vibrant colors, clean lines",
+        colorful: "Super colorful joyful pop-art comic character portrait illustration, bright rainbow palette, bold clean ink lines",
         sketched: "Hand-drawn character portrait sketch, pencil textures, expressive ink outlines",
         watercolor: "Watercolor storybook character portrait, warm soft colors, clean outlines",
         noir: "Film noir style hand-drawn chalk/ink character portrait, highly contrast dramatic shadows",
