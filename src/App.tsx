@@ -3126,7 +3126,39 @@ export default function App() {
         </MotionConfig>
       </main>
 
-      <footer className="relative z-10 py-8 px-6 text-center mt-auto no-print max-w-2xl mx-auto">
+      <footer className="relative z-10 py-8 px-6 text-center mt-auto no-print space-y-4 max-w-2xl mx-auto">
+        {/* Clickable Interactive Token & Pricing Pill */}
+        <button
+          type="button"
+          onClick={() => setShowDiagnostics(true)}
+          className="inline-flex flex-col md:flex-row items-center justify-between gap-3 bg-white border-3 border-black px-4 py-3 rounded-2xl hover:scale-[1.01] active:scale-[0.99] cursor-pointer transition-transform shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] text-xs font-black text-black w-full"
+        >
+          <div className="flex items-center gap-2">
+            <span className="relative flex h-3 w-3">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+            </span>
+            <span className="uppercase tracking-wider">
+              {language === 'he' ? "סטטוס AI, טוקנים ועלויות" : language === 'fr' ? "Statut IA, Jetons & Coûts" : "AI Status, Tokens & Cost"}
+            </span>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2.5 text-[11px]">
+            <span className="bg-[#FFB800] text-black font-black px-2.5 py-0.5 rounded-lg border-2 border-black font-mono">
+              {language === 'he' ? `עלות: $${totalCostUSD.toFixed(5)}` : language === 'fr' ? `Coût : $${totalCostUSD.toFixed(5)}` : `Cost: $${totalCostUSD.toFixed(5)}`}
+            </span>
+            <span className="bg-black text-[#FFB800] font-black px-2.5 py-0.5 rounded-lg border-2 border-black font-mono">
+              {language === 'he' ? `יתרה: ${(SESSION_CREDIT - totalTokens).toLocaleString()}` : language === 'fr' ? `Reste : ${(SESSION_CREDIT - totalTokens).toLocaleString()}` : `Left: ${(SESSION_CREDIT - totalTokens).toLocaleString()}`}
+            </span>
+            <span className="opacity-70 font-mono">
+              {language === 'he' ? `טוקנים: ${totalTokens.toLocaleString()}` : language === 'fr' ? `Jetons : ${totalTokens.toLocaleString()}` : `Tokens: ${totalTokens.toLocaleString()}`}
+            </span>
+            <span className="text-accent font-black uppercase hover:underline flex items-center gap-1">
+              {language === 'he' ? "פירוט ➔" : language === 'fr' ? "Détails ➔" : "Details ➔"}
+            </span>
+          </div>
+        </button>
+
         <div className="text-[11px] font-bold uppercase opacity-60 space-y-1 text-center">
           <div>Comicskido &copy; 2026 • Personalized Story Book Studio</div>
           <div className="flex items-center justify-center gap-2 text-black/70 font-black tracking-wide">
@@ -3362,6 +3394,76 @@ export default function App() {
                     />
                     <div className="w-12 h-6 bg-zinc-300 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-black after:border-2 after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500 border-2 border-black"></div>
                   </label>
+                </div>
+              </div>
+
+              {/* 4. Token Usage & Production Cost Ledger */}
+              <div className="bg-white border-2 border-black p-4 rounded-2xl space-y-3">
+                <div className="flex justify-between items-center text-xs font-black uppercase tracking-wide">
+                  <span>{language === 'he' ? "4. ניצול טוקנים ועלויות ייצור (Tokens & Cost)" : "4. Token Usage & Cost Ledger"}</span>
+                  <span className="font-mono text-[11px]">
+                    {totalTokens.toLocaleString()} / {SESSION_CREDIT.toLocaleString()} tkn
+                  </span>
+                </div>
+
+                {/* Token Progress bar */}
+                <div className="w-full h-3.5 bg-gray-100 border-2 border-black rounded-full overflow-hidden p-0.5">
+                  <div 
+                    className="h-full bg-accent rounded-full transition-all duration-300"
+                    style={{ width: `${Math.min(100, (totalTokens / SESSION_CREDIT) * 100)}%` }}
+                  />
+                </div>
+
+                {/* API Status & Latency */}
+                <div className="grid grid-cols-2 gap-2 text-xs font-bold">
+                  <div className={cn("bg-[#EFECE6] p-2.5 rounded-xl border border-black/30", isRTL ? "text-right" : "text-left")}>
+                    <span className="block text-[9px] uppercase opacity-60 font-black">
+                      {language === 'he' ? "סטטוס אחרון" : "Last API Status"}
+                    </span>
+                    <span className="font-mono text-[10px] text-emerald-700 leading-tight block truncate" title={aiStats.lastApiStatus}>
+                      {aiStats.lastApiStatus}
+                    </span>
+                  </div>
+                  <div className={cn("bg-[#EFECE6] p-2.5 rounded-xl border border-black/30", isRTL ? "text-right" : "text-left")}>
+                    <span className="block text-[9px] uppercase opacity-60 font-black">
+                      {language === 'he' ? "זמן תגובה" : "Latency"}
+                    </span>
+                    <span className="font-mono text-[10px] text-black leading-tight block">
+                      {aiStats.lastApiResponseTimeMs ? `${aiStats.lastApiResponseTimeMs.toLocaleString()}ms` : "0ms"}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Detailed Cost Ledger */}
+                <div className="bg-[#E9E6DC] border-2 border-black rounded-xl overflow-hidden divide-y divide-black/15 font-mono text-[11px] font-bold">
+                  <div className="p-2 flex justify-between items-center bg-white/30">
+                    <span className="opacity-80 text-[10px]">
+                      {language === 'he' ? `קלט עלילה (${aiStats.textModelName})` : `Story Prompts (${aiStats.textModelName})`}
+                    </span>
+                    <span>{aiStats.textPromptTokens.toLocaleString()} tkn ≈ ${textPromptCost.toFixed(5)}</span>
+                  </div>
+                  <div className="p-2 flex justify-between items-center bg-white/30">
+                    <span className="opacity-80 text-[10px]">
+                      {language === 'he' ? `פלט עלילה (${aiStats.textModelName})` : `Story Output (${aiStats.textModelName})`}
+                    </span>
+                    <span>{aiStats.textCompletionTokens.toLocaleString()} tkn ≈ ${textCompletionCost.toFixed(5)}</span>
+                  </div>
+                  <div className="p-2 flex justify-between items-center bg-white/30">
+                    <span className="opacity-80 text-[10px]">
+                      {language === 'he' ? `פורטרטים (${aiStats.imageModelName})` : `Portraits (${aiStats.imageModelName})`}
+                    </span>
+                    <span>{aiStats.characterCalls} cards ≈ ${characterCost.toFixed(3)}</span>
+                  </div>
+                  <div className="p-2 flex justify-between items-center bg-white/30">
+                    <span className="opacity-80 text-[10px]">
+                      {language === 'he' ? `פאנלים (${aiStats.imageModelName})` : `Comic Panels (${aiStats.imageModelName})`}
+                    </span>
+                    <span>{aiStats.imageCalls} panels ≈ ${imageCost.toFixed(3)}</span>
+                  </div>
+                  <div className="p-2.5 flex justify-between items-center bg-black text-[#FFB800] uppercase font-black tracking-wide text-xs">
+                    <span>{language === 'he' ? 'סה"כ עלות משוערת' : 'Total Estimated Cost'}</span>
+                    <span>${totalCostUSD.toFixed(5)} USD</span>
+                  </div>
                 </div>
               </div>
 
